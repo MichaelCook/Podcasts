@@ -1,0 +1,87 @@
+<!--
+  Copyright (C) 2011 The Android Open Source Project
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+  -->
+
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.waxrat.podcasts"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <!-- 4.0.3-4.0.4 Ice Cream Sandwich = 15
+         4.1 Jelly Bean = 16
+         4.2 = 17 -->
+    <uses-sdk android:minSdkVersion="16" android:targetSdkVersion="17" />
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>
+
+    <application android:icon="@drawable/ic_launcher"
+        android:label="@string/app_title" android:allowBackup="true">
+
+        <activity android:name=".MainActivity"
+            android:label="@string/app_title"
+            android:theme="@android:style/Theme.Black.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service android:exported="false" android:name=".MusicService">
+            <intent-filter>
+                <action android:name="com.waxrat.podcasts.action.TOGGLE_PLAYBACK" />
+                <action android:name="com.waxrat.podcasts.action.PLAY" />
+                <action android:name="com.waxrat.podcasts.action.PAUSE" />
+                <action android:name="com.waxrat.podcasts.action.FORWARD" />
+                <action android:name="com.waxrat.podcasts.action.REWIND" />
+                <action android:name="com.waxrat.podcasts.action.PREVIOUS" />
+                <action android:name="com.waxrat.podcasts.action.NEXT" />
+                <action android:name="com.waxrat.podcasts.action.STOP" />
+                <action android:name="com.waxrat.podcasts.action.SEEK" />
+                <action android:name="com.waxrat.podcasts.action.DELETE_FINISHED" />
+                <action android:name="com.waxrat.podcasts.action.REWIND_ALL" />
+                <action android:name="com.waxrat.podcasts.action.SAVE" />
+                <action android:name="com.waxrat.podcasts.action.RESTORE" />
+            </intent-filter>
+        </service>
+
+        <receiver android:name=".MusicIntentReceiver">
+            <intent-filter>
+                <action android:name="android.media.AUDIO_BECOMING_NOISY" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".BootCompletedReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
+        <service android:name=".DownloadService" />
+
+        <receiver android:name="DownloadCompleteReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE"/>
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

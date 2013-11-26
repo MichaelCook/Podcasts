@@ -1,0 +1,674 @@
+#!/usr/bin/perl
+#
+# Pull MP3 podcasts from a web site.
+#
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# The views and conclusions contained in the software and documentation are
+# those of the authors and should not be interpreted as representing official
+# policies, either expressed or implied, of Michael Cook.
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Carp qw(carp verbose);
+
+my ($THIS) = $0 =~ m%([^/]+)$%;
+my $USAGE = "usage: $THIS label url\n";
+
+my $TRACK = "/local/podcasts/track";
+my $TMP = "/home/mcook/tmp";
+my $ART;			# Pick a random image from this directory
+				# to use as album art.
+my $SPEEDUP = "0%";
+my $SCRAPE = "dump";
+my $KEEPTAGS;
+my @EXCLUDE_URLS;
+my @SKIP_LINES;
+my $PREFIX;
+my $PRIORITY;
+my $MAX = 0;
+my $VOLUME = 6;
+my $VERBOSE;
+my $DRYRUN;
+my $CHECK;
+my $DEBUG;
+
+Getopt::Long::config("bundling");
+GetOptions
+("scrape|s=s" => \$SCRAPE,
+ #
+ # Method for finding MP3 links in the web page.
+ #  dump - Use "link -dump", look for *.mp3 references.
+ #  source - Scan the HTML or XML source for URLs ending in .mp3.
+ #
+
+ "speedup|s=s" => \$SPEEDUP,
+ #
+ # How much to speed up the audio by.  0% means don't speed up.  See speedup3
+ # for other acceptable values.
+ #
+
+ "dry-run|n" => \$DRYRUN,
+ "verbose|v" => \$VERBOSE,
+
+ "keep-tags" => \$KEEPTAGS,
+ #
+ # Don't modify the MP3 ID tags.
+ #
+
+ "update-tags" => sub { $KEEPTAGS = 0 },
+ #
+ # Update the MP3 ID tags.
+ #
+
+ "exclude-urls=s" => \@EXCLUDE_URLS,
+ #
+ # Exclude any URLs whose base name matches any of the given regexes.
+ #
+
+ "skip-lines=s" => \@SKIP_LINES,
+ #
+ # When scraping text, skip any lines that match these regexes.
+ #
+
+ "max=i" => \$MAX,
+ #
+ # Get at most this many tracks.  0 means no limit.
+ #
+
+ "volume=i" => \$VOLUME,
+ #
+ # Volume adjustment.
+ #
+
+ "prefix=s" => \$PREFIX,
+ "no-prefix" => sub { $PREFIX = "" },
+ #
+ # Prefix for the file name of the track.
+ #
+
+ "priority=s" => \$PRIORITY,
+ #
+ # Prefix prefix.
+ #
+
+ "check" => \$CHECK,
+ #
+ # Verify this script has everything it needs to run.
+ # Validates any "use" directives and any dependencies on external programs.
+ #
+
+ "debug!" => \$DEBUG,
+ #
+ # Debug mode.
+ #
+)
+or die $USAGE;
+
+my $SKIP_LINES;
+$SKIP_LINES = join "|", @SKIP_LINES
+    if @SKIP_LINES;
+
+# Run an external command and check its exit status.
+sub systemx
+{
+    warn "> run: @_\n" if $DEBUG;
+    system @_;
+    return 1 unless $?;
+    carp "command failed ($?): @_";
+    return 0;
+}
+
+# Run a command and capture its output (stdout and stderr).  If the command
+# fails, show the output.
+sub system_quiet
+{
+    my @cmd = @_;
+
+    return systemx @cmd
+	if $VERBOSE;
+
+    warn "> run: @cmd\n" if $DEBUG;
+    my $kid = open my $ph, "-|";
+    defined $kid or die "pipe/fork: $!";
+    unless ($kid)
+    {
+	open STDERR, ">/dev/null" or die $!;
+	exec @cmd
+	    or die "exec '$cmd[0]': $!";
+    }
+    my @out = <$ph>;
+    if ($?)
+    {
+	print @out;
+	carp "command failed ($?): @_";
+	return 0;
+    }
+    if ($DEBUG)
+    {
+	chomp @out;
+	print "> +--\n";
+	print "> |$_\n"
+	    for @out;
+	print "> +--\n";
+    }
+    return 1;
+}
+
+sub unlinkx
+{
+    my ($f) = @_;
+
+    if (unlink $f)
+    {
+	warn "> removed $f\n" if $DEBUG;
+	return;
+    }
+    if ($! eq "No such file or directory")
+    {
+	warn "> didn't have to remove $f\n" if $DEBUG;
+	return;
+    }
+    carp "unlink $f: $!";
+}
+
+sub base
+{
+    local $_ = shift;
+    s/\?.*//;
+    s%^.*/%%;
+    s/\.mp3$//i;
+    return "$_.mp3";
+}
+
+my $LAST_FETCH;
+
+sub fetch
+{
+    my ($label, @args) = @_;
+
+    #print "Check $label: @args\n";
+    warn "> fetch: @args\n" if $DEBUG;
+    open my $ph, "-|", "lynx-batch", @args
+	or die "pipe/fork: $!";
+    my @page = <$ph>;
+
+    $LAST_FETCH = "$TMP/$THIS-$label.fetched";
+    open my $fh, ">$LAST_FETCH" or die "open $LAST_FETCH: $!";
+    print $fh @page;
+    close $fh
+	or die "close $LAST_FETCH: $!";
+    warn "> wrote $LAST_FETCH\n" if $DEBUG;
+
+    chomp @page;
+    return @page;
+}
+
+sub refs
+{
+    my ($label, $url) = @_;
+
+    my @page = fetch $label, "-dump", $url;
+    for (;;)
+    {
+	@page or die "No references for $label in $url";
+	$_ = shift @page;
+	last if /^References$/;
+    }
+    my @refs;
+    while (@page)
+    {
+	$_ = shift @page;
+	next if @SKIP_LINES && /$SKIP_LINES/oi;
+	push @refs, $1
+	    if /^ *\d+\. (.*)/;
+    }
+    return @refs;
+}
+
+systemx "uses", qw/wget mp3gain/ or die;
+systemx "speedup3", "--check" or die;
+systemx "tag3", "--check" or die;
+systemx "art3", "--check" or die;
+systemx "ls3", "--check" or die;
+$CHECK && exit 0;
+
+@ARGV == 2 or die $USAGE;
+my $label = shift;
+my $url = shift;
+
+my %when;
+my $fh;
+if (open $fh, $TRACK)
+{
+    while (<$fh>)
+    {
+	chomp;
+	my @f = split /\t/;
+	@f == 3 or die "oops '$_'";
+	my $when = shift @f;
+	my $label = shift @f;
+	my $title = shift @f;
+	#warn "> did |$title| $label = $when\n" if $DEBUG;
+	$when{$title} = $when;
+    }
+}
+else
+{
+    warn "> open $TRACK: $!\n" if $DEBUG;
+    $! eq "No such file or directory"
+	or die "open $TRACK: $!";
+}
+
+$fh = undef;
+open $fh, ">>$TRACK"
+    or die "open $TRACK: $!";
+{
+    my $a = select $fh;
+    $| = 1; # autoflush
+    select $a;
+}
+
+sub did
+{
+    my ($name, $label) = @_;
+
+    warn "> did $name ($label)\n" if $DEBUG;
+    $when{$name} = time;
+    print $fh "$when{$name}\t$label\t$name\n"
+	unless $DRYRUN;
+}
+
+my @links;
+if ($SCRAPE eq "dump")
+{
+    for (refs $label, $url)
+    {
+	push @links, { url => $_, base => base($_) }
+	    if /\.mp3\b/;
+    }
+}
+elsif ($SCRAPE eq "source")
+{
+    warn "> scrape source\n" if $DEBUG;
+    my @page = fetch $label, "-source", $url;
+    while (@page)
+    {
+	$_ = shift @page;
+	next if @SKIP_LINES && /$SKIP_LINES/oi;
+	push @links, { url => $1, base => base($1) }
+	    while m%['"](http:[^'"]+\.mp3)(\?[^'"]*)?\s*['"]%g;
+    }
+}
+elsif ($SCRAPE eq "source2")
+{
+    # +--
+    # |<embed id="mpl" height="32" width="300" flashvars="&file=http://www.podtrac.com/pts/redirect.mp3?http://media.blubrry.com/domesticceo/traffic.libsyn.com/domesticceo/dceo_056.mp3&skin=/assets/flvplayer/skins/modieus/modieus.swf&backcolor=FCC1C0&frontcolor=ffffff&lightcolor=ffffff"
+    # |allowfullscreen="false" allowscriptaccess="always" quality="high" name="mpl"
+    # |style="" src="/assets/flvplayer/4.3/player.swf" type="application/x-shockwave-flash" />
+    # +--
+
+    warn "> scrape source2\n" if $DEBUG;
+    my @page = fetch $label, "-source", $url;
+    while (@page)
+    {
+	$_ = shift @page;
+	next if @SKIP_LINES && /$SKIP_LINES/oi;
+	push @links, { url => $1, base => base($1) }
+	    while m%\?(http://.+?\.mp3)<%g;
+    }
+}
+elsif ($SCRAPE eq "soundcloud.com")
+{
+    for (refs $label, $url)
+    {
+	next if @SKIP_LINES && /$SKIP_LINES/oi;
+	push @links, { url => $_, base => "$1.mp3" }
+	    if m%^http://soundcloud\.com/.*/([^/]+)/download$%;
+    }
+}
+elsif ($SCRAPE eq "podcast.com")
+{
+    for (refs $label, $url)
+    {
+	warn "> ref |$_|\n" if $DEBUG;
+	next if @SKIP_LINES && /$SKIP_LINES/oi;
+	next unless m%/I-\d+\.htm%;
+	next if exists $when{$_};
+	my $url2 = $_;
+	my @page = fetch $label, "-source", $url2;
+	my @mp3;
+	for (@page)
+	{
+	    push @mp3, { url => $1, base => base($1) }
+		if /'file': '(.*)'/i;
+	}
+	unless (@mp3)
+	{
+	    carp "no links for $label in $url2";
+	    next;
+	}
+	$when{$url2} = time;
+	push @links, @mp3;
+    }
+}
+else
+{
+    die "invalid scrape method $SCRAPE";
+}
+unless (@links)
+{
+    print "No links for $label in $url\n" if $VERBOSE;
+    exit 0;
+}
+unless ($DEBUG)
+{
+    unlink $LAST_FETCH
+	or carp "unlink $LAST_FETCH: $!";
+}
+
+if (@EXCLUDE_URLS)
+{
+    my $ex = join "|", @EXCLUDE_URLS;
+    if ($DEBUG)
+    {
+	warn "> --exclude-urls--\n";
+	warn "> '$ex' ", 0+@links, "\n";
+	warn "> |", $_->{base}, "|\n"
+	    for @links;
+    }
+    @links = grep { $_->{base} !~ /$ex/o } @links;
+    if ($DEBUG)
+    {
+	warn "> --after--\n";
+	warn "> ", 0+@links, "\n";
+	warn "> |", $_->{base}, "|\n"
+	    for @links;
+    }
+    @links == 0
+	and die "No links for $label in $url after excluding $ex\n";
+}
+
+my @art;
+if ($ART)
+{
+    open my $ph, "find $ART -type f |"
+	or die $!;
+    while (<$ph>)
+    {
+	next unless /\.jpg$/;
+	chomp;
+	push @art, $_;
+    }
+    warn "> found ", 0 + @art, " album art images\n" if $DEBUG;
+}
+
+my %saw;
+my @download;
+while (@links)
+{
+    my $link = shift @links;
+    warn "> link {$link->{url}}\n" if $DEBUG;
+    warn "> base {$link->{base}}\n" if $DEBUG;
+
+    my $name = "$label-$link->{base}";
+    warn "> name {$name}\n" if $DEBUG;
+
+    # If the page has multiple links to the same MP3, keep only one.
+    next if $saw{$name}++;
+
+    if (exists $when{$name})
+    {
+	warn "> already did $name\n" if $DEBUG;
+	next;
+    }
+    warn "> will do $name\n" if $DEBUG;
+    $link->{name} = $name;
+    push @download, $link;
+}
+
+unless (@download) {
+    warn "> nothing to download for $url\n" if $DEBUG;
+    exit;
+}
+
+$| = 1;
+print @download . " podcast", @download == 1 ? "" : "s",
+    " to download for $url.\n"
+    if $VERBOSE || @download > 1;
+
+if ($MAX && @download > $MAX) {
+    print "Downloading only $MAX of " . @download, ".\n";
+    splice @download, $MAX;
+}
+#if (@download) { print $_->{name}, "\n" for @download; die "xxx $label" }
+
+sub seconds {
+    my ($file) = @_;
+    local $_ = `ls3 -h -cSECONDS "$file"`;
+    $_ //= 0;
+    chomp;
+    warn "> seconds '$file' = $_\n" if $DEBUG;
+    return $_;
+}
+
+sub mmss {
+    my ($s) = @_;
+    return sprintf "%d:%02d", $s / 60, $s % 60;
+}
+
+my $sep = "-" x 70 . "\n";
+my $exit = 0;
+while (@download)
+{
+    my $d = shift @download;
+    my $url = $d->{url};
+    my $base = $d->{base};
+    my $name = $d->{name};
+
+    print $sep, "Download $name\n" if $VERBOSE;
+    print $sep, qq(printf >>$TRACK "0\\t%s\\t%s\\n" "$label" "$name"\n) if $VERBOSE;
+
+    #my $t = "$TMP/$name";
+    my $t = "#$name";
+    unlinkx $t;
+    unless (systemx "wget", "--quiet", "--output-document=$t",
+	    "--user-agent=",	# No User-Agent header.
+	    $url)
+    {
+	carp "Couldn't get $name from $url";
+	unlinkx $t;
+	$exit = 1;
+	next;
+    }
+    my $size = -s $t;
+    unless (defined($size))
+    {
+	carp "stat $t: $!";
+	$exit = 1;
+	next;
+    }
+    if ($size < 1024)
+    {
+	# The download actually failed?
+	carp "file is too small: $size $t";
+	$exit = 1;
+	next;
+    }
+    # Normalize the volume.
+    #  -r        Apply track gain automatically.
+    #  -q        Quiet.
+    #  -c        Don't warn about clipping.
+    #  -m i      Modify suggested MP3 gain by integer i
+    print "Normalize volume...\n" if $VERBOSE;
+    unless (system_quiet "mp3gain", "-r", "-q", "-c", -m => $VOLUME, $t)
+    {
+	$exit = 1;
+	next;
+    }
+    unless ($SPEEDUP eq "0%")
+    {
+	my $before = seconds $t;
+	print "Speed up by $SPEEDUP...\n"
+	    if $VERBOSE;
+	unless (system_quiet "speedup3", "--quiet", "--by=$SPEEDUP", $t)
+	{
+	    $exit = 1;
+	    next;
+	}
+	my $after = seconds $t;
+	print mmss($before), " - ", mmss($before - $after), " = ",
+	    mmss($after), "\n";
+    }
+    unless ($KEEPTAGS)
+    {
+	print "Tag...\n" if $VERBOSE;
+	unless (systemx("tag3",
+			$VERBOSE ? "--verbose" : (),
+			"--album=\$_ = q/$label/",
+			"--genre=\$_ = \"$url\"",
+			#"--album=s/^/$label... /",
+			#"--title=s/\\s+/ /g; s/^ //; 0 while s/^\\#?\\d+: ?//; s/^/$PREFIX/",
+			#"--artist=\$_ = \$MMSS . q/ $label $SPEEDUP/",
+			#"--track=\$_ = \$SECONDS",
+			#"--artist=\$_ = q/$label / . \$MMSS",
+			#"--album=\$_ = q/$SPEEDUP/",
+			$t))
+	{
+	    $exit = 1;
+	    next;
+	}
+    }
+    my $file = $name;
+    $file =~ s/[-_\s]+/-/g;
+    if (defined $PREFIX)
+    {
+	$file = "$PREFIX$file";
+    }
+    else
+    {
+	my $s = seconds $t;
+	$file = sprintf "%02d%02d-%s", $s / 60, $s % 60, $file;
+    }
+    $file = "$PRIORITY$file"
+	if defined $PRIORITY;
+    unless (systemx "mv", $t, $file)
+    {
+	$exit = 1;
+	next;
+    }
+
+    if ($ART)
+    {
+	if (@art)
+	{
+	    # Pick a random element and remove it from @art.
+	    my $i = int rand(@art);
+	    my $img = $art[$i];
+	    $art[$i] = $art[-1]; # might be self assignment
+	    pop @art;
+	    print "Art $img...\n" if $VERBOSE;
+	    systemx "art3", $img, $file;
+	}
+	else
+	{
+	    print "No album art for $name\n" if $VERBOSE;
+	}
+    }
+    did $name, $label;
+
+    print "[" . @download . "]\n" if @download > 0;
+    systemx "ls3", "-n", "-cFILE,TITLE,ARTIST,ALBUM,MMSS", $file;
+
+    #
+    # See if the title contains unprintable chars.
+    #
+    # "A Mystery in Titan", 194, 146, "s Craters"
+    # "Don", 195, 162, 194, 128, 194, 153, "t Eat The Panda"
+    # "What", 194, 146, "s in Your Drink"
+    # "Defeat Your Doppelg", 195, 164, "ngers"
+    #
+    # Well-formed UTF8?
+    # "Capturing Darwin", 226, 128, 153, "s Dilemma"
+    # "Oscar", 226, 128, 153, "s Youngest Nominee & Macklemore", 226, 128, 153, "s Thrift Shop"
+    # "Ubuntu", 226, 128, 153, "s Big Gamble  | LAS | s26e01"
+    # "NetCast Studio", 226, 128, 153, "s 1000th Episode Celebration"
+    # "350 GG  ", 226, 128, 156, "Who", 226, 128, 157, " Versus ", 226, 128, 156, "That", 226, 128, 157, ""
+    # "351 GG Is a Company a ", 226, 128, 156, "Who", 226, 128, 157, " or a ", 226, 128, 156, "That", 226, 128, 157, "?"
+    # "353 GG Can Apple Get Away with ", 226, 128, 156, "Funness", 226, 128, 157, "?"
+    # "354 GG Starting a Sentence with ", 226, 128, 156, "However", 226, 128, 157, ": Right or Wrong?"
+    # "357 GG Why the Plural of ", 226, 128, 156, "Die", 226, 128, 157, " Is ", 226, 128, 156, "Dice,", 226, 128, 157, " not ", 226, 128, 156, "Douse.", 226, 128, 157, ""
+    # "358 GG ", 226, 128, 156, "Only", 226, 128, 157, ": The Most Insidious Misplaced Modifier"
+    # "360 GG Will himself be on the pig", 226, 128, 153, "s back this St. Patrick", 226, 128, 153, "s Day?"
+    #
+    {
+	my $kid = open my $ph, "-|";
+	defined $kid or die "pipe/fork: $!";
+	unless ($kid) {
+	    exec "ls3", "-hcTITLE", $file
+		or die "exec ls3: $!";
+	}
+	{
+	    local $/;
+	    $_ = <$ph>;
+	}
+	unless (defined) {
+	    carp "oops";
+	    $_ = "";
+	}
+	chomp;
+	my $np = qr/[^ -~]/;
+	warn "> title: ", length, " |$_|\n" if $DEBUG;
+	if (/$np/) {
+	    print "-*-" x 25, "\n";
+	    print "Title has non-printable characters in $file\n";
+	    my @p;
+	    for (split /($np+)/, $_, -1) {
+		if (/$np/) {
+		    push @p, map { ord } split "";
+		}
+		else {
+		    s/([\\\"])/\\$1/g;
+		    push @p, qq("$_");
+		}
+	    }
+	    print join(", ", @p), "\n";
+	    print "-*-" x 25, "\n";
+	}
+    }
+
+    systemx "rm", "-f", glob("#*~");
+
+    print $sep, "\n" if $VERBOSE;
+}
+
+close $fh
+    or die "close $TRACK: $!";
+warn "> Updated $TRACK\n" if $DEBUG;
+
+exit $exit;

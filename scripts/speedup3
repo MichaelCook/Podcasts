@@ -1,0 +1,131 @@
+#!/bin/bash
+#
+# Speed up an MP3.
+# Modifies the MP3 file in place (saving a backup copy).
+#
+# apt: sox libsox-fmt-mp3
+#
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# The views and conclusions contained in the software and documentation are
+# those of the authors and should not be interpreted as representing official
+# policies, either expressed or implied, of Michael Cook.
+
+this=${0##*/} # This script's name for error messages
+
+speed=1.1
+pitch=-300
+showprogress=--show-progress
+check=false
+debug=false
+
+tryhelp () {
+    echo >&2 "Try '$this --help' for more information."
+    exit 1
+}
+opts=$(getopt --name "$this" --shell sh \
+    -o qdh \
+    -l "check,quiet,by:,debug,
+        help" \
+    -- "$@") || tryhelp
+eval set -- "$opts"
+while :; do
+    arg="$1"; shift
+    case "$arg" in
+	(--by)
+	    case "$1" in
+		(50%) speed=1.5 pitch=-700 ;; # 33% = 1 - 1/1.5
+		(40%) speed=1.4 pitch=-600 ;;
+		(30%) speed=1.3 pitch=-500 ;;
+		(20%) speed=1.2 pitch=-400 ;; # 17% = 1 - 1/1.2
+		(10%) speed=1.1 pitch=-300 ;;
+		(-10%) speed=0.9 pitch=300 ;;
+		(-20%) speed=0.8 pitch=400 ;;
+		(*)
+		    echo >&2 "$this: Invalid --by argument '$1'"
+		    exit 1
+		    ;;
+	    esac
+	    shift
+	    ;;
+
+	(--check) check=true ;;
+	(--quiet | -q) showprogress= ;;
+	(--debug | -d) debug=true ;;
+	(--help | -h)
+	    cat <<EOF
+usage: $this [options] files.mp3..."
+
+Options:
+--by percent       10%, 20%, 30%, 40% or 50%.  Default is 10%.
+--quiet (-q)       Don't show progress.
+--check            Verify this script has what it needs to run.
+--debug (-d)       Debug mode
+EOF
+	    exit 0
+	    ;;
+
+	(--) break ;;
+	(*)  echo >&2 "$this: internal error at '$arg'"; exit 1 ;;
+    esac
+done
+
+if $check; then
+    uses sox || exit
+    exit 0
+fi
+
+if [ $# -eq 0 ]; then
+    echo >&2 "$this: wrong number of arguments"
+    tryhelp
+fi
+
+seconds () {
+    ls3 -h -cSECONDS "$1" || echo 0
+}
+
+mmss () {
+    local s="$1"
+    printf "%02d:%02d\n" $((s / 60)) $((s % 60))
+}
+
+exit=0
+for i; do
+    before=$(seconds "$i")
+    tmp="$(dirname "$i")/"#"$(basename "$i")"
+    if ! sox $showprogress "$i" "$tmp" speed $speed pitch $pitch; then
+	exit=1
+	continue
+    fi
+    if ! mv --backup=numbered "$tmp" "$i"; then
+	exit=1
+	continue
+    fi
+    after=$(seconds "$i")
+    echo "$i: $(mmss $before) - $(mmss $((before - after))) = $(mmss $after)"
+done
+exit $exit

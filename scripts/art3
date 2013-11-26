@@ -1,0 +1,159 @@
+#!/usr/bin/perl
+#
+# Embed an image in an MP3 file.
+#
+# This script uses MP3::Tag.  See also:
+# http://warped.org/blog/2009/05/03/itunes-fixing-id3-tags-in-mp3s-take-two/
+# which uses Audio::TagLib.
+#
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# The views and conclusions contained in the software and documentation are
+# those of the authors and should not be interpreted as representing official
+# policies, either expressed or implied, of Michael Cook.
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Image::Magick;		# apt: perlmagick
+use MP3::Tag;			# apt: libmp3-tag-perl
+
+my ($THIS) = $0 =~ m%([^/]+)$%;
+my $USAGE = "usage: $THIS image files.mp3...\n";
+
+my $MAXWIDTH = 300;
+my $MAXHEIGHT = 300;
+my $CHECK;
+my $DEBUG;
+
+Getopt::Long::config("bundling");
+GetOptions
+("check!" => \$CHECK,
+ #
+ # Verify this script has what it needs to run.
+ # Validates any "use" directives and any dependencies on external programs.
+ #
+
+ "debug!" => \$DEBUG,
+ #
+ # Debug mode.
+ #
+)
+or die $USAGE;
+
+exit 0 if $CHECK;
+
+@ARGV >= 2 or die $USAGE;
+
+my $image = do {
+    my $file = shift;
+    my $img = new Image::Magick;
+    $_ = $img->Read($file) and die $_;
+
+    #
+    # Make the image smaller if bigger than MAXWIDTH x MAXHEIGHT.
+    #
+    my ($ow, $oh) = $img->Get("width", "height");
+    my ($nw, $nh) = ($ow, $oh);
+    my $r = $ow / $oh;
+    if ($nw > $MAXWIDTH)
+    {
+	$nw = $MAXWIDTH;
+	$nh = $nw / $r;
+    }
+    if ($nh > $MAXHEIGHT)
+    {
+	$nh = $MAXHEIGHT;
+	$nw = $nh * $r;
+    }
+    $nw = sprintf "%.0f", $nw;
+    $nh = sprintf "%.0f", $nh;
+    warn "> size: $ow x $oh => $nw x $nh (", sprintf("%.2f", $r), ")\n"
+	if $DEBUG;
+    $img->Resize(width => $nw, height => $nh)
+	if $nw != $ow || $nh != $oh;
+
+    $img->ImageToBlob(magick => "jpg");
+};
+
+my @HEADER = (chr(0), "image/jpg", chr(3), "Cover Image");
+
+my $exit = 0;
+for my $file (@ARGV)
+{
+    warn "> file $file\n" if $DEBUG;
+    my $tag = MP3::Tag->new($file);
+    unless ($tag)
+    {
+	warn "$file: $!";
+	$exit = 1;
+	next;
+    }
+
+    $tag->get_tags();
+
+    my $id;
+    if (exists $tag->{ID3v2})
+    {
+	warn "> ID3v2 tag exists already\n" if $DEBUG;
+	$id = $tag->{ID3v2};
+    }
+    else
+    {
+	warn "> Adding ID3v2 tag\n" if $DEBUG;
+	$id = $tag->new_tag("ID3v2");
+    }
+
+    my $frames = $id->supported_frames();
+    exists $frames->{APIC}
+	or die "APIC is not a supported frame?";
+
+    my $fids = $id->get_frame_ids();
+    if (exists $$fids{APIC})
+    {
+	warn "> Replacing APIC\n" if $DEBUG;
+	$id->change_frame("APIC", @HEADER, $image);
+    }
+    else
+    {
+	warn "> Adding APIC\n" if $DEBUG;
+	$id->add_frame("APIC", @HEADER, $image);
+    }
+
+    warn "> Update tags\n" if $DEBUG;
+    {
+	local $SIG{__WARN__} = sub {
+	    print STDERR @_;
+	    $exit = 1;
+	};
+	$tag->update_tags;
+    }
+
+    warn "> Close $file\n" if $DEBUG;
+    $tag->close();
+}
+exit $exit;
