@@ -87,16 +87,22 @@
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:gravity="center"
-            android:minWidth="156dp" >
+            android:gravity="center" >
 
             <TextView
                 android:id="@+id/remainingText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:minWidth="156dp"
                 android:text="@string/no_remaining_time"
                 android:textAppearance="?android:attr/textAppearanceLarge"
                 android:textSize="64sp" />
+
+            <CheckBox
+                android:id="@+id/keepScreenOn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical|right" />
 
         </LinearLayout>
 

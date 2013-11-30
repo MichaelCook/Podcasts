@@ -160,6 +160,7 @@ import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemLongClickListener;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.ListView;
 import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
@@ -175,6 +176,7 @@ OnLongClickListener, OnSeekBarChangeListener {
     private Button mRewindButton;
     private SeekBar mSeekBar;
     private TextView mRemainingText;
+    private CheckBox mKeepScreenOnCheckBox;
 
     private ReceiveMessages receiver = null;
 
@@ -207,9 +209,8 @@ OnLongClickListener, OnSeekBarChangeListener {
     private int lastPosition = -1;
 
     private void onPlayStateIntent(Intent intent) {
-        boolean play = intent.getBooleanExtra("play", false);
         String path = intent.getStringExtra("path");
-        setPlayPauseImage(play);
+        setPlayPauseImage();
         if (path != null) {
             Tracks.selectTrackByName(path);
             setSeekBar();
@@ -263,21 +264,31 @@ OnLongClickListener, OnSeekBarChangeListener {
     }
     */
 
+    private boolean isLandscape() {
+        return Configuration.ORIENTATION_LANDSCAPE ==
+                getResources().getConfiguration().orientation;
+    }
+
+    private void setKeepScreenOn() {
+        /* If we're in landscape mode, assume we're in the car and so we
+        want to keep the screen on while we're driving. */
+        //boolean kso = MusicService.playing() && isLandscape();
+        boolean kso = MusicService.playing() && mKeepScreenOnCheckBox.isChecked();
+        if (Log.ok) Log.i(TAG, "keep screen on: " + kso);
+        mPlayButton.setKeepScreenOn(kso);
+    }
+
     private int lastPlaying = -1;
 
-    void setPlayPauseImage(boolean playing) {
+    void setPlayPauseImage() {
+        boolean playing = MusicService.playing();
         int nowPlaying = playing ? 1 : 0;
         if (nowPlaying != lastPlaying) {
             if (Log.ok) Log.i(TAG, "playing " + lastPlaying + " -> " + nowPlaying);
             lastPlaying = nowPlaying;
             mPlayButton.setBackgroundResource(playing ? R.drawable.btn_pause
                     : R.drawable.btn_play);
-            /* If we're in landscape mode, assume we're in the car and so we
-               want to keep the screen on while we're driving. */
-            boolean kso = playing && Configuration.ORIENTATION_LANDSCAPE ==
-                    getResources().getConfiguration().orientation;
-            if (Log.ok) Log.i(TAG, "keep screen on: " + kso);
-            mPlayButton.setKeepScreenOn(kso);
+            setKeepScreenOn();
         }
     }
 
@@ -296,7 +307,7 @@ OnLongClickListener, OnSeekBarChangeListener {
         super.onResume();
         restore();
         setListItems();
-        setPlayPauseImage(MusicService.playing());
+        setPlayPauseImage();
         setSeekBar();
         /* As long as we're the foreground activity, the user can lock and
            unlock the screen by simply pressing the power button (no need
@@ -306,6 +317,8 @@ OnLongClickListener, OnSeekBarChangeListener {
            the screen (e.g., enter their PIN). */
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                 | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
+
+        mKeepScreenOnCheckBox.setChecked(isLandscape());
     }
 
     @Override
@@ -339,6 +352,7 @@ OnLongClickListener, OnSeekBarChangeListener {
         mRewindButton = (Button) findViewById(R.id.rewindbutton);
         mSeekBar = (SeekBar) findViewById(R.id.seekBar);
         mRemainingText = (TextView) findViewById(R.id.remainingText);
+        mKeepScreenOnCheckBox = (CheckBox) findViewById(R.id.keepScreenOn);
 
         mPlayButton.setOnClickListener(this);
         //mPlayButton.setOnLongClickListener(this);
@@ -347,6 +361,7 @@ OnLongClickListener, OnSeekBarChangeListener {
         mForwardButton.setOnLongClickListener(this);
         mRewindButton.setOnLongClickListener(this);
         mSeekBar.setOnSeekBarChangeListener(this);
+        mKeepScreenOnCheckBox.setOnClickListener(this);
 
         registerReceiver(receiver, new IntentFilter(MusicService.PLAY_STATE_INTENT));
         registerReceiver(receiver, new IntentFilter(DownloadService.DOWNLOAD_STATE_INTENT));
@@ -441,6 +456,14 @@ OnLongClickListener, OnSeekBarChangeListener {
         }
         if (target == mRewindButton) {
             startService(new Intent(MusicService.ACTION_REWIND));
+            return;
+        }
+        if (target == mKeepScreenOnCheckBox) {
+            if (mKeepScreenOnCheckBox.isChecked())
+                toastShort("Keep screen on while playing");
+            else
+                toastShort("Don't keep screen on");
+            setKeepScreenOn();
             return;
         }
         Log.w(TAG, "Unexpected onClick target " + target);
