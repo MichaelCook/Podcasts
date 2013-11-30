@@ -4,6 +4,16 @@
     exit;
   }
 
+  # Password check.
+  if (!isset($_GET["p"])) {
+    trigger_error("Access denied");
+    exit;
+  }
+  if ($_GET["p"] != "sekret") {
+    trigger_error("Access denied: |" . $_GET["p"] . "|");
+    exit;
+  }
+
   if (isset($_GET["get"])) {
     $file = $_GET["get"];
 

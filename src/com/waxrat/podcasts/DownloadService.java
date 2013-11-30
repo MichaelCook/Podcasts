@@ -31,6 +31,7 @@ public final class DownloadService extends IntentService {
     final static File INCOMING_FOLDER = Tracks.FOLDER;
     final static String HOME_NETWORK = "montana";
     final static String UPDATE_URL = "http://marcy.waxrat.com:1030/podcasts.php";
+    final static String PASSWORD = "sekret";
     final static long INTERVAL = AlarmManager.INTERVAL_FIFTEEN_MINUTES;
 
     public static final String DOWNLOAD_STATE_INTENT =
@@ -218,7 +219,7 @@ public final class DownloadService extends IntentService {
         BufferedReader br = null;
         ArrayList<Download> ret = new ArrayList<Download>();
         try {
-            URL url = new URL(UPDATE_URL);
+            URL url = new URL(UPDATE_URL + "?p=" + urlEncode(PASSWORD));
             HttpURLConnection h = (HttpURLConnection) url.openConnection();
             h.setRequestMethod("GET");
             h.setReadTimeout(15000);
@@ -281,7 +282,8 @@ public final class DownloadService extends IntentService {
         try {
             out = new FileOutputStream(dest);
 
-            URL url = new URL(UPDATE_URL + "?get=" + urlEncode(file.name));
+            URL url = new URL(UPDATE_URL + "?get=" + urlEncode(file.name) +
+                    "&p=" + urlEncode(PASSWORD));
             if (Log.ok) Log.i(TAG, "Download track: " + url);
             HttpURLConnection h = (HttpURLConnection) url.openConnection();
             h.setRequestMethod("GET");
@@ -343,7 +345,8 @@ public final class DownloadService extends IntentService {
         if (Log.ok) Log.i(TAG, "removeFromServer " + name);
         BufferedReader br = null;
         try {
-            URL url = new URL(UPDATE_URL + "?rm=" + urlEncode(name));
+            URL url = new URL(UPDATE_URL + "?rm=" + urlEncode(name) +
+                    "&p=" + urlEncode(PASSWORD));
             if (Log.ok) Log.i(TAG, "removeFromServer " + url);
             HttpURLConnection h = (HttpURLConnection) url.openConnection();
             h.setRequestMethod("GET");
