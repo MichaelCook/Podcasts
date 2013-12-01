@@ -306,6 +306,7 @@ OnLongClickListener, OnSeekBarChangeListener {
         if (Log.ok) Log.i(TAG, "onResume");
         super.onResume();
         restore();
+        mKeepScreenOnCheckBox.setChecked(isLandscape());
         setListItems();
         setPlayPauseImage();
         setSeekBar();
@@ -317,8 +318,6 @@ OnLongClickListener, OnSeekBarChangeListener {
            the screen (e.g., enter their PIN). */
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                 | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
-
-        mKeepScreenOnCheckBox.setChecked(isLandscape());
     }
 
     @Override
