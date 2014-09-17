@@ -132,10 +132,14 @@ MusicFocusable {
                         curMs = durMs;
                     }
                     t.currentMs = curMs;
-                    if (t.durationMs != durMs) {
-                        Log.w(TAG, "Update duration from " + t.durationMs +
-                              " to " + durMs + " (" + (durMs - t.durationMs) +
-                              ')');
+                    int d = durMs - t.durationMs;
+                    if (d != 0) {
+                        if (d != 1)
+                            Log.w(TAG, "Update duration from " + t.durationMs +
+                                    " to " + durMs + " (" + d + ')');
+                        else
+                            if (Log.ok) Log.i(TAG, "Update duration by 1 from " +
+                                    t.durationMs + " to " + durMs);
                         t.durationMs = durMs;
                     }
                 }
