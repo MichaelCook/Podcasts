@@ -176,6 +176,11 @@ public final class DownloadService extends IntentService {
             return false;
         }
         String ssid = info.getSSID();
+
+        // In some Android versions, the SSID is enclosed in quotes.
+        if (ssid != null && ssid.startsWith("\"") && ssid.endsWith("\""))
+            ssid = ssid.substring(1, ssid.length() - 1);
+
         if (ssid == null || ssid.length() == 0) {
             announce(context, announceOk, "Won't download, no Wi-Fi network");
             return false;
@@ -192,6 +197,11 @@ public final class DownloadService extends IntentService {
             return false;
         }
         String ssid = info.getSSID();
+
+        // In some Android versions, the SSID is enclosed in quotes.
+        if (ssid != null && ssid.startsWith("\"") && ssid.endsWith("\""))
+            ssid = ssid.substring(1, ssid.length() - 1);
+
         if (ssid == null || ssid.length() == 0) {
             announce(context, announceOk, "Won't download, no Wi-Fi network");
             return false;
