@@ -299,12 +299,14 @@ MusicFocusable {
 
     private void rewindAll() {
         int n = 0;
-        for (Track t : Tracks.tracks)
+        for (int i = 0; i <= Tracks.position; ++i) {
+            Track t = Tracks.tracks.get(i);
             if (t.currentMs != 0) {
                 if (Log.ok) Log.i(TAG, "Rewind " + t);
                 t.currentMs = 0;
                 ++n;
             }
+        }
         toastShort("Rewound " + n);
         save();
         announceRestored();

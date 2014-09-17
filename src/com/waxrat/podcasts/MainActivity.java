@@ -704,8 +704,8 @@ OnLongClickListener, OnSeekBarChangeListener {
             new OnMenuItemClickListener() {
         public boolean onMenuItemClick(MenuItem item) {
             int n = 0;
-            for (Track t : Tracks.tracks)
-                if (t.currentMs != 0)
+            for (int i = 0; i <= Tracks.position; ++i)
+                if (Tracks.tracks.get(i).currentMs != 0)
                     ++n;
             if (n == 0)
                 toastShort("None to rewind");
