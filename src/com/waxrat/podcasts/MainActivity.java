@@ -496,8 +496,10 @@ OnLongClickListener, OnSeekBarChangeListener {
            So, we check on keyDown events.  The restore() function is assumed
            to be very efficient when the track folder has not actually
            changed. */
+/* This tends to cause the ListView to jump around.
         if (keyCode == KeyEvent.KEYCODE_MENU)
             restore();
+*/
         return super.onKeyDown(keyCode, event);
     }
 
