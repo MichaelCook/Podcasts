@@ -616,13 +616,8 @@ MusicFocusable {
             updateActivity();
         }
 
-        /* Playing a clip like this seems to bring out bugs in Android.
-           Sometimes the clip is too loud.  Sometimes it goes to the speakers
-           when I'm using headphones.  For now, do it only while we're in
-           landscape mode, which we presume to mean I'm in the car driving. */
-        boolean enable = false;
-        if (enable && Configuration.ORIENTATION_LANDSCAPE ==
-                getResources().getConfiguration().orientation) {
+        boolean enable = true;
+        if (enable) {
             if (Log.ok) Log.i(TAG, "Beep...");
             MediaPlayer mp = MediaPlayer.create(this, R.raw.beep);
             mp.start();
