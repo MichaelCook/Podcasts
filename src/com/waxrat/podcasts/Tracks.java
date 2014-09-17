@@ -16,8 +16,9 @@ import org.farng.mp3.id3.AbstractID3v2;
 import org.farng.mp3.id3.ID3v1;
 
 import android.content.Context;
-import android.content.Intent;
 import android.media.MediaMetadataRetriever;
+import android.os.Environment;
+import android.content.Intent;
 import android.net.Uri;
 
 class Tracks {
@@ -27,7 +28,9 @@ class Tracks {
     private final static String FILE_NAME = "_state.txt";
 
     /** The folder where the MP3 tracks are stored. */
-    public final static File FOLDER = new File("/mnt/extSdCard/Podcasts");
+    public final static File FOLDER =
+      new File(Environment.getExternalStorageDirectory().getAbsolutePath() +
+      File.separator + "Podcasts");
 
     /** The last modification time of the tracks folder. */
     private static long folderLastMod = -1;
