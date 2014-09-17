@@ -81,7 +81,7 @@ public final class DownloadService extends IntentService {
         }
     }
 
-    private final int NOTIFY_ID = 10789;
+    private static final int NOTIFY_ID = 10789;
 
     private void notification(String text, int smallIcon) {
         if (Log.ok) Log.i(TAG, "Notification: " + text);

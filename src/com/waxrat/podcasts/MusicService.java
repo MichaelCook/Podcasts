@@ -171,23 +171,23 @@ MusicFocusable {
         Focused         // we have full audio focus
     };
 
-    AudioFocus mAudioFocus = AudioFocus.NoFocusNoDuck;
+    static AudioFocus mAudioFocus = AudioFocus.NoFocusNoDuck;
 
     // File name of the track currently playing
-    String playingPath = null;
+    static String playingPath = null;
 
     // Title of the track currently playing
-    String playingTitle = null;
+    static String playingTitle = null;
 
     /* What time offset to seek to when prepared. */
-    private int seekMs = -1;
+    private static int seekMs = -1;
 
     // The ID we use for the notification (the on-screen alert that appears at
     // the notification area at the top of the screen as an icon -- and as
     // text as well if the user expands the notification area).
     final int NOTIFICATION_ID = 1;
 
-    private RemoteControlClient remoteControl;
+    private static RemoteControlClient remoteControl;
 
     // The component name of MusicIntentReceiver, for use with media button
     // and remote control APIs
