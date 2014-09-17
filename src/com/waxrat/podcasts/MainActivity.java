@@ -791,10 +791,10 @@ OnLongClickListener, OnSeekBarChangeListener {
     public boolean onCreateOptionsMenu(Menu menu) {
         super.onCreateOptionsMenu(menu);
         if (Log.ok) Log.i(TAG, "onCreateOptionsMenu");
-        menu.add("Delete Finished").setOnMenuItemClickListener(deleteFinished);
-        menu.add("Rewind All").setOnMenuItemClickListener(rewindAll);
+        menu.add("Delete").setOnMenuItemClickListener(deleteFinished);
+        menu.add("Rewind").setOnMenuItemClickListener(rewindAll);
         //menu.add("Skip to End").setOnMenuItemClickListener(skipToEnd);
-        menu.add("Check Downloads").setOnMenuItemClickListener(checkDownloads);
+        menu.add("Download").setOnMenuItemClickListener(checkDownloads);
         return true;
     }
 }
