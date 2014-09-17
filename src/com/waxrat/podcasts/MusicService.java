@@ -658,13 +658,8 @@ MusicFocusable {
             if (Log.ok) Log.i(TAG, "Beep...");
             MediaPlayer mp = MediaPlayer.create(this, R.raw.beep);
             mp.start();
-            try {
-                while (mp.isPlaying())
-                    Thread.sleep(100);
-            }
-            catch (InterruptedException ex) {
-                if (Log.ok) Log.i(TAG, "InterruptedException " + ex.getMessage());
-            }
+            while (mp.isPlaying())
+                sleepMs(100);
             mp.release();
             if (Log.ok) Log.i(TAG, "Beep...done");
         }
@@ -812,5 +807,14 @@ MusicFocusable {
     @Override
     public IBinder onBind(Intent arg0) {
         return null;
+    }
+
+    private static void sleepMs(int ms) {
+        try {
+            Thread.sleep(ms);
+        }
+        catch (InterruptedException ex) {
+            Log.i(TAG, "InterruptedException " + ex.getMessage());
+        }
     }
 }
