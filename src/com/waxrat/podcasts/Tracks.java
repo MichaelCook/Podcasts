@@ -169,8 +169,14 @@ class Tracks {
                         if (t.durationMs != 0 && t.durationMs != durMs)
                             Log.w(TAG, "readState: Duration changed " +
                                t.durationMs + " => " + durMs + ": " + t);
-                        t.currentMs = curMs;
                         t.durationMs = durMs;
+                        if (t.currentMs != curMs) {
+                            if (t.currentMs != 0)
+                                Log.w(TAG, "readState: Not changing currentMs from " +
+                                      t.currentMs + " to " + curMs + ": " + t);
+                            else
+                                t.currentMs = curMs;
+                        }
                         if (title != null)
                             t.title = title;
                         t.lastMod = lastMod;
