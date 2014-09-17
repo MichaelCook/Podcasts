@@ -134,13 +134,15 @@ public final class DownloadService extends IntentService {
             Download[] downloads = filesToDownload(fromActivity);
             if (downloads == null)
                 return;
-            notification(downloads.length == 1 ?
-                "One podcast to download" :
-                downloads.length + " podcasts to download",
-                android.R.drawable.stat_sys_download);
+            int numMore = downloads.length;
             INCOMING_FOLDER.mkdirs();
             int numDownloaded = 0;
             for (Download download : downloads) {
+                notification(numMore == 1 ?
+                        "One podcast to download" :
+                        numMore + " podcasts to download",
+                        android.R.drawable.stat_sys_download);
+                numMore -= 1;
                 if (!checkWifi(this, fromActivity))
                     break;
                 // TODO: Check available disk space
