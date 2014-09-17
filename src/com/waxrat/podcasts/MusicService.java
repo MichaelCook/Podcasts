@@ -649,7 +649,9 @@ MusicFocusable {
             if (Log.ok) Log.i(TAG, "onCompletion " + v + " cur " + v.currentMs + " -> " + v.durationMs);
             v.currentMs = v.durationMs;
             save();
-            updateActivity();
+            /* Don't call updateActivity here. It sometimes causes the track
+               that just finished to get rewound. */
+            //updateActivity();
         }
 
         boolean enable = true;
