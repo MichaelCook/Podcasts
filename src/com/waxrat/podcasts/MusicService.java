@@ -668,20 +668,19 @@ MusicFocusable {
             if (Log.ok) Log.i(TAG, "Beep...done");
         }
 
-        if (Tracks.position + 1 >= Tracks.tracks.size()) {
-            if (Log.ok) Log.i(TAG, "No track to play next");
+        Track t = Tracks.selectNext();
+        if (t == null) {
+            Log.i(TAG, "No track to play next");
             stop(false);
         }
         else {
-            ++Tracks.position;
-            Track t = Tracks.currentTrack();
             playingPath = t.pathName;
             playingTitle = t.title;
             seekMs = t.currentMs - OVERLAP_MS;
             if (seekMs < 0)
                 seekMs = 0;
-            if (Log.ok) Log.i(TAG, "Playing [" + Tracks.position + "] " + playingPath +
-                    " at " + seekMs);
+            if (Log.ok) Log.i(TAG, "Playing [" + Tracks.position + "] " +
+                playingPath + " at " + seekMs);
             tryToGetAudioFocus();
             playNextSong();
         }

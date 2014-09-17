@@ -646,7 +646,7 @@ OnLongClickListener, OnSeekBarChangeListener {
             go = true;
         if (!go) {
             Track t = Tracks.currentTrack();
-            Log.i(TAG, "Will play track " + position + ' ' + t);
+            if (Log.ok) Log.i(TAG, "Will play track " + position + ' ' + t);
             setSeekBar();
             startService(new Intent(MusicService.ACTION_SAVE));
             return;
@@ -664,7 +664,7 @@ OnLongClickListener, OnSeekBarChangeListener {
             if (curMs < 0)
                 curMs = 0;
         }
-        Log.i(TAG, "Play track " + position + ' ' + t);
+        if (Log.ok) Log.i(TAG, "Play track " + position + ' ' + t);
         Intent in = new Intent(MusicService.ACTION_PLAY);
         in.putExtra("path", t.pathName);
         in.putExtra("title", t.title);

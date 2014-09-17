@@ -60,15 +60,30 @@ class Tracks {
         for (int i = 0; i < n; ++i)
             if (name.equals(tracks.get(i).pathName)) {
                 if (position != i) {
-                    if (Log.ok) Log.i(TAG, "trackPosition " + position + " -> " + i);
+                    if (Log.ok) Log.i(TAG, "trackPosition " + position +
+                            " -> " + i + " for " + name);
                     position = i;
                 }
                 break;
             }
     }
 
+    static Track selectNext() {
+        /* Select the first track that hasn't been finished yet. */
+        int n = tracks.size();
+        for (int i = 0; i < n; ++i) {
+            Track t = tracks.get(i);
+            if (t.currentMs != t.durationMs) {
+                position = i;
+                return t;
+            }
+        }
+        return null;
+    }
+
     static synchronized void save(Context context) {
         StringBuffer sb = new StringBuffer();
+        if (Log.ok) Log.i(TAG, "save position=" + position);
         sb.append(position);
         sb.append('\n');
         for (Track t : tracks) {
@@ -198,6 +213,7 @@ class Tracks {
         catch (IOException ex) {
             Log.e(TAG, "readState failed", ex);
         }
+        if (Log.ok) Log.i(TAG, "readState position=" + position);
     }
 
     private static class Caseless implements Comparator<File> {
