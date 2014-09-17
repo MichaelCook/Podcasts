@@ -401,7 +401,7 @@ MusicFocusable {
     final static int REWIND_MS = 10000;
 
     /** Never advance further than this far from the end of the track. */
-    final static int BARRIER_MS = 5000;
+    final static int BARRIER_MS = 2000;
 
     void forward() {
         if (mState != State.Playing && mState != State.Paused)
