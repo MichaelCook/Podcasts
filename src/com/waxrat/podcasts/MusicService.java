@@ -146,7 +146,43 @@ MusicFocusable {
             }
         }
         sendBroadcast(i);
+
+        /*
+         * This is a workaround for an Android bug. If Android chooses to switch
+         * to Bluetooth speakers while we're playing, the playback starts
+         * playing at 10x speed until we press pause then play. The hack is to
+         * notice when we switch to Bluetooth speakers and then automatically
+         * pause for a couple seconds and then resume play.
+         */
+        if (isPlaying) {
+            int isBluetoothA2dpOn = mAudioManager.isBluetoothA2dpOn() ? 1 : 0;
+            if (wasBluetoothA2dpOn != -1 &&
+                wasBluetoothA2dpOn != isBluetoothA2dpOn) {
+                if (isBluetoothA2dpOn != 0) {
+                    toastShort("Bluetooth Headset is now ON");
+                    pause();
+                    tickHandler.postDelayed(autoPlay, 1000);
+                } else {
+                    toastShort("Bluetooth Headset is now OFF");
+                }
+            }
+            wasBluetoothA2dpOn = isBluetoothA2dpOn;
+        }
     }
+    private int wasBluetoothA2dpOn = -1;
+    private Runnable autoPlay = new Runnable() {
+        public void run() {
+            tickHandler.removeCallbacks(autoPlay);
+            Track t = Tracks.findTrackByName(playingPath);
+            if (t != null) {
+                seekMs = t.currentMs - 1000;
+                if (seekMs < 0)
+                    seekMs = 0;
+            }
+            tryToGetAudioFocus();
+            playNextSong();
+        }
+    };
 
     void setState(State newState) {
         if (mState == newState)
