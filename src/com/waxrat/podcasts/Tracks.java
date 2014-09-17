@@ -17,6 +17,7 @@ import org.farng.mp3.id3.ID3v1;
 
 import android.content.Context;
 import android.media.MediaMetadataRetriever;
+import android.media.MediaScannerConnection;
 import android.os.Environment;
 import android.content.Intent;
 import android.net.Uri;
@@ -347,11 +348,22 @@ class Tracks {
             save(context);
             changed = true;
         }
-        if (changed) {
-            if (Log.ok) Log.i(TAG, "Send ACTION_MEDIA_MOUNTED");
-            context.sendBroadcast(new Intent(Intent.ACTION_MEDIA_MOUNTED, 
-                    Uri.parse("file://" + FOLDER)));
-        }
+
+/*
+        if (changed)
+            scan(context, FOLDER);
+*/
+
         return changed;
+    }
+
+    public static void scan(Context context, File file) {
+        MediaScannerConnection.scanFile(context, new String[]{file.getPath()},
+                null, null);
+        Intent i = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+        Uri u = Uri.fromFile(file);
+        i.setData(u);
+        /*if (Log.ok)*/ Log.i(TAG, "Send ACTION_MEDIA_MOUNTED: " + u);
+        context.sendBroadcast(i);
     }
 }

@@ -57,7 +57,7 @@ public final class DownloadService extends IntentService {
         PendingIntent pi = PendingIntent.getService(context, 0, i,
             PendingIntent.FLAG_NO_CREATE);
         if (pi != null) {
-            //if (Log.ok) Log.i(TAG, "schedule: PendingIntent already exists");
+            if (Log.ok) Log.i(TAG, "schedule: PendingIntent already exists");
             return;
         }
         pi = PendingIntent.getService(context, 0, i, 0);
@@ -356,6 +356,7 @@ public final class DownloadService extends IntentService {
             return false;
         }
         if (Log.ok) Log.i(TAG, "Renamed " + dest + " to " + installed);
+        Tracks.scan(this, installed);
         return true;
     }
 

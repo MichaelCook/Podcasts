@@ -357,11 +357,11 @@ MusicFocusable {
             if (t.durationMs != 0 && t.currentMs == t.durationMs) {
                 if (Log.ok) Log.i(TAG, "Delete " + t);
                 File f = new File(Tracks.FOLDER, t.pathName);
-                if (!f.delete()) {
+                if (f.delete()) {
+                    ++del;
+                    Tracks.scan(this, f);
+                } else
                     Log.w(TAG, "Can't delete " + f);
-                    break;
-                }
-                ++del;
             }
             else {
                 ++keep;

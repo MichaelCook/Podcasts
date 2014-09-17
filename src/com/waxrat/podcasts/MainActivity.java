@@ -238,7 +238,7 @@ OnLongClickListener, OnSeekBarChangeListener {
     }
 */
 
-    private void restore() {
+    private void askForRestore() {
         if (Log.ok) Log.i(TAG, "Send intent: restore");
         startService(new Intent(MusicService.ACTION_RESTORE));
     }
@@ -305,11 +305,10 @@ OnLongClickListener, OnSeekBarChangeListener {
     public void onResume() {
         if (Log.ok) Log.i(TAG, "onResume");
         super.onResume();
-        restore();
-        mKeepScreenOnCheckBox.setChecked(isLandscape());
+        askForRestore();
         setListItems();
-        setPlayPauseImage();
-        setSeekBar();
+
+        mKeepScreenOnCheckBox.setChecked(isLandscape());
         /* As long as we're the foreground activity, the user can lock and
            unlock the screen by simply pressing the power button (no need
            to enter a PIN, for example). But if they lock then unlock the
