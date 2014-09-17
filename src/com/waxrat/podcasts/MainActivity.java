@@ -685,6 +685,7 @@ OnLongClickListener, OnSeekBarChangeListener {
     private final OnMenuItemClickListener deleteFinished =
             new OnMenuItemClickListener() {
         public boolean onMenuItemClick(MenuItem item) {
+            DownloadService.cancelNotification(MainActivity.this);
             if (Log.ok) Log.i(TAG, "Send intent: delete finished");
             startService(new Intent(MusicService.ACTION_DELETE_FINISHED));
             return true;
@@ -751,6 +752,7 @@ OnLongClickListener, OnSeekBarChangeListener {
 */
 
     private final void startDownload() {
+        DownloadService.cancelNotification(MainActivity.this);
         Intent in = new Intent(MainActivity.this, DownloadService.class);
         in.putExtra("from-activity", true);
         startService(in);

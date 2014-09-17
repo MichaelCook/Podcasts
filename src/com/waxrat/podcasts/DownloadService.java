@@ -96,6 +96,12 @@ public final class DownloadService extends IntentService {
         mgr.notify(NOTIFY_ID, nb.build());
     }
 
+    static void cancelNotification(Context context) {
+        NotificationManager mgr = (NotificationManager)
+                context.getSystemService(NOTIFICATION_SERVICE);
+        mgr.cancel(NOTIFY_ID);
+    }
+
     /* Send a broadcast intent telling our status.  If our activity is running,
        the activity can display the message.  Otherwise, the message is lost
        except in the logs, which is presumed to be okay (e.g., if we're
