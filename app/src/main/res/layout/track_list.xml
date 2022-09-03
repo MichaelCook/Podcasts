@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:padding="5dp" >
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:gravity="end"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/duration"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:gravity="end"
+            android:text="12:34"
+            android:textSize="16sp"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:id="@+id/percentDone"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:gravity="end"
+            android:minWidth="40dp"
+            android:text="100%"
+            android:textSize="16sp"
+            tools:ignore="HardcodedText" />
+
+        <TextView
+            android:id="@+id/nextQuiet"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_margin="1dp"
+            android:gravity="end"
+            android:text="11:00"
+            android:textSize="16sp"
+            tools:ignore="HardcodedText" />
+
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:maxLines="3"
+        android:text="One fish two fish red fish blue fish"
+        android:textSize="24sp"
+        tools:ignore="HardcodedText" />
+
+</LinearLayout>

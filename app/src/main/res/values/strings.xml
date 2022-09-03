@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_title">Podcasts</string>
+    <string name="no_remaining_time">00:00</string>
+</resources>

@@ -1,26 +1,36 @@
 <?php // -*- php -*-
-  if (!chdir("/local/podcasts")) {
-    trigger_error("chdir failed");
+  $fh = fopen("../podcasts.cfg", "r");
+  if (!$fh) {
+    trigger_error("open failed in |" . getcwd() . "|");
     exit;
   }
+  $dir = trim(fgets($fh));
+  $pass = trim(fgets($fh));
+  fclose($fh);
 
   # Password check.
   if (!isset($_GET["p"])) {
     trigger_error("Access denied");
     exit;
   }
-  if ($_GET["p"] != "sekret") {
+  if ($_GET["p"] != $pass) {
     trigger_error("Access denied: |" . $_GET["p"] . "|");
     exit;
   }
 
-  if (isset($_GET["get"])) {
-    $file = $_GET["get"];
+  if (!chdir($dir)) {
+    trigger_error("chdir '$dir' failed in |" . getcwd() . "|");
+    exit;
+  }
 
-    if (strstr($file, "/") !== false) {
-      trigger_error("File name '$file' contains path separator");
+  if (isset($_GET["get"])) {
+    $id = $_GET["get"];
+
+    if (strstr($id, "/") !== false) {
+      trigger_error("Invalid ID '$id'");
       exit;
     }
+    $file = $id . ".mp3";
     if (!file_exists($file)) {
       trigger_error("File does not exist '$file'");
       exit;
@@ -39,26 +49,16 @@
   }
 
   if (isset($_GET["rm"])) {
-    $file = $_GET["rm"];
+    $id = $_GET["rm"];
 
-    if (strstr($file, "/") !== false) {
-      trigger_error("File name '$file' contains path separator");
+    if (strstr($id, "/") !== false) {
+      trigger_error("Invalid ID '$id'");
       exit;
     }
+    unlink($id . ".mp3");
+    unlink($id . ".tag");
+
     header("Content-type: text/plain");
-
-//    if (!unlink($file)) {
-//      trigger_error("Couldn't unlink $file");
-//      exit;
-//    }
-
-    putenv("PATH=/home/mcook/bin:/sbin:/bin:/usr/bin:/usr/sbin");
-    system("del " . escapeshellarg($file), $exit);
-    if ($exit) {
-      trigger_error("Trouble deleting $file: $exit");
-      exit;
-    }
-
     echo "OK\n";
     exit;
   }
@@ -68,14 +68,43 @@
     trigger_error("opendir failed");
     exit;
   }
-  header("Content-type: text/plain");
-  while (($file = readdir($dh)) !== false) {
-    if (substr($file, -4) != ".mp3")
+  $tags = array();
+  while (($tag = readdir($dh)) !== false) {
+    if (substr($tag, -4) != ".tag")
       continue;
-    if (substr($file, 0, 1) == "#")
+    if (substr($tag, 0, 1) == ".")
       continue;
-    echo filesize($file), "\t", $file, "\n";
+    $id = substr($tag, 0, -4);
+    if (!file_exists($id . ".mp3"))
+      continue;
+    $tags[] = $tag;
   }
   closedir($dh);
-  echo "OK\n";
+
+  // remaining seconds
+  if (isset($_GET["r"]))
+    file_put_contents("polled", $_GET["r"] . " OK\n");
+
+  if (isset($_GET["polled"])) {
+    header("Content-type: text/plain");
+
+    echo count($tags), " ", file_get_contents("polled");
+    exit;
+  }
+
+  $since = false;
+  if (isset($_GET["s"]))
+    $since = $_GET["s"];
+
+  header("Content-type: text/plain");
+  $newest = -1;
+  foreach ($tags as $tag) {
+    $mtime = filemtime($tag);
+    $newest = max($newest, $mtime);
+    if ($since === false || $mtime > $since) {
+      readfile($tag);
+      echo "\n";
+    }
+  }
+  echo "OK\t$newest\n";
 ?>

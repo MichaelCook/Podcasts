@@ -1,4 +1,0 @@
-"This library reads song information, such as song title, artist, and album,
-from an MP3 file."
-
-http://javamusictag.sourceforge.net/

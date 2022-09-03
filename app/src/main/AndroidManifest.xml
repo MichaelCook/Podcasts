@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.waxrat.podcasts"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application android:icon="@drawable/ic_launcher"
+        android:label="@string/app_title"
+        android:supportsRtl="false"
+        android:usesCleartextTraffic="true">
+
+        <activity android:name=".MainActivity"
+            android:launchMode="singleTask"
+            android:exported="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service android:exported="false" android:name=".MusicService">
+            <intent-filter>
+                <action android:name="com.waxrat.podcasts.action.DELETE_FINISHED" />
+                <action android:name="com.waxrat.podcasts.action.GET_STATUS" />
+                <action android:name="com.waxrat.podcasts.action.MAYBE_PAUSE" />
+                <action android:name="com.waxrat.podcasts.action.PAUSE" />
+                <action android:name="com.waxrat.podcasts.action.PLAY" />
+                <action android:name="com.waxrat.podcasts.action.RESTORE" />
+                <action android:name="com.waxrat.podcasts.action.SEEK" />
+                <action android:name="com.waxrat.podcasts.action.SKIP_BACK" />
+                <action android:name="com.waxrat.podcasts.action.SKIP_FORWARD" />
+                <action android:name="com.waxrat.podcasts.action.SKIP_TO_TRACK_END" />
+                <action android:name="com.waxrat.podcasts.action.SKIP_TO_TRACK_START" />
+                <action android:name="com.waxrat.podcasts.action.STOP" />
+                <action android:name="com.waxrat.podcasts.action.TOGGLE_PLAYBACK" />
+            </intent-filter>
+        </service>
+
+        <service android:exported="false" android:name=".TcpService">
+            <intent-filter>
+                <action android:name="com.waxrat.podcasts.action.TCP_BIND" />
+            </intent-filter>
+        </service>
+
+        <!-- This receiver has no effect other than to cause my car to enable the forward/reverse
+             buttons on the steering wheel & console.  No intents are ever actually received.  Hmm. -->
+        <receiver android:name=".MusicIntentReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

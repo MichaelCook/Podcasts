@@ -1,0 +1,68 @@
+#!/bin/bash
+this=${0##*/}
+
+cvt () {
+    local in="$1.png"; shift
+    local size="$1"; shift
+    local out="app/src/main/res/$1"
+
+    echo "$in => $out"
+    mkdir -p "$(dirname "$out")"
+    convert -resize "$size" "$in" "$out" || exit
+}
+
+# This script doesn't actually use 'mogrify' but we're trying to verify the
+# ImageMagick tools are installed but "convert" is too common a name.
+uses convert mogrify || exit
+
+if [ $# -eq 0 ]; then
+    set -- playing trouble launcher
+fi
+
+for i; do
+    case "$i" in
+        (playing)
+            cvt pi 38x38 drawable-hdpi/ic_stat_playing.png
+            cvt pi 36x36 drawable-hdpi-v11/ic_stat_playing.png
+            cvt pi 24x38 drawable-hdpi-v9/ic_stat_playing.png
+            cvt pi 25x25 drawable-mdpi/ic_stat_playing.png
+            cvt pi 24x24 drawable-mdpi-v11/ic_stat_playing.png
+            cvt pi 16x25 drawable-mdpi-v9/ic_stat_playing.png
+            cvt pi 50x50 drawable-xhdpi/ic_stat_playing.png
+            cvt pi 48x48 drawable-xhdpi-v11/ic_stat_playing.png
+            cvt pi 32x50 drawable-xhdpi-v9/ic_stat_playing.png
+            ;;
+
+        (trouble)
+            cvt frown 38x38 drawable-hdpi/ic_stat_trouble.png
+            cvt frown 36x36 drawable-hdpi-v11/ic_stat_trouble.png
+            cvt frown 24x38 drawable-hdpi-v9/ic_stat_trouble.png
+            cvt frown 25x25 drawable-mdpi/ic_stat_trouble.png
+            cvt frown 24x24 drawable-mdpi-v11/ic_stat_trouble.png
+            cvt frown 16x25 drawable-mdpi-v9/ic_stat_trouble.png
+            cvt frown 50x50 drawable-xhdpi/ic_stat_trouble.png
+            cvt frown 48x48 drawable-xhdpi-v11/ic_stat_trouble.png
+            cvt frown 32x50 drawable-xhdpi-v9/ic_stat_trouble.png
+            ;;
+
+        (launcher)
+            cvt icon 72x72 drawable-hdpi/ic_launcher.png
+            cvt icon 48x48 drawable-mdpi/ic_launcher.png
+            cvt icon 96x96 drawable-xhdpi/ic_launcher.png
+            ;;
+
+        (*)
+            echo >&2 "$this: unexpected argument '$1'"
+            exit 1
+            ;;
+    esac
+done
+
+# 128x128 drawable-hdpi/forward.png
+# 128x128 drawable-hdpi/forward_pressed.png
+# 128x128 drawable-hdpi/pause.png
+# 128x128 drawable-hdpi/pause_pressed.png
+# 128x128 drawable-hdpi/play.png
+# 128x128 drawable-hdpi/play_pressed.png
+# 128x128 drawable-hdpi/rewind.png
+# 128x128 drawable-hdpi/rewind_pressed.png
