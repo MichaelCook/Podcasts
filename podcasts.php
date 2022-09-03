@@ -1,4 +1,21 @@
 <?php // -*- php -*-
+  function get_tags() {
+    $tags = array();
+    $dh = opendir(".");
+    while (($tag = readdir($dh)) !== false) {
+      if (substr($tag, -4) != ".tag")
+        continue;
+      if (substr($tag, 0, 1) == ".")
+        continue;
+      $id = substr($tag, 0, -4);
+      if (!file_exists($id . ".mp3"))
+        continue;
+      $tags[] = $tag;
+    }
+    closedir($dh);
+    return $tags;
+  }
+
   $fh = fopen("../podcasts.cfg", "r");
   if (!$fh) {
     trigger_error("open failed in |" . getcwd() . "|");
@@ -8,18 +25,25 @@
   $pass = trim(fgets($fh));
   fclose($fh);
 
-  # Password check.
+  if (!chdir($dir)) {
+    trigger_error("chdir '$dir' failed in |" . getcwd() . "|");
+    exit;
+  }
+
+  // Don't require a password for 'polled' so pod-poll doesn't need it
+  if (isset($_GET["polled"])) {
+    header("Content-type: text/plain");
+    echo count(get_tags()), " ", file_get_contents("polled");
+    exit;
+  }
+
+  // Password check.
   if (!isset($_GET["p"])) {
     trigger_error("Access denied");
     exit;
   }
   if ($_GET["p"] != $pass) {
     trigger_error("Access denied: |" . $_GET["p"] . "|");
-    exit;
-  }
-
-  if (!chdir($dir)) {
-    trigger_error("chdir '$dir' failed in |" . getcwd() . "|");
     exit;
   }
 
@@ -68,29 +92,11 @@
     trigger_error("opendir failed");
     exit;
   }
-  $tags = array();
-  while (($tag = readdir($dh)) !== false) {
-    if (substr($tag, -4) != ".tag")
-      continue;
-    if (substr($tag, 0, 1) == ".")
-      continue;
-    $id = substr($tag, 0, -4);
-    if (!file_exists($id . ".mp3"))
-      continue;
-    $tags[] = $tag;
-  }
-  closedir($dh);
+  $tags = get_tags();
 
   // remaining seconds
   if (isset($_GET["r"]))
     file_put_contents("polled", $_GET["r"] . " OK\n");
-
-  if (isset($_GET["polled"])) {
-    header("Content-type: text/plain");
-
-    echo count($tags), " ", file_get_contents("polled");
-    exit;
-  }
 
   $since = false;
   if (isset($_GET["s"]))
