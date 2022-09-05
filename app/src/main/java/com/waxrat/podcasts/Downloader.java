@@ -592,6 +592,12 @@ public final class Downloader extends Worker {
             announce(context, fromActivity, "Socket timeout, try again");
             return null;
         }
+        catch (java.net.NoRouteToHostException ex) {
+            // Likely transient networking problem
+            Log.i(TAG, "NoRouteToHostException");
+            announce(context, fromActivity, "No route to host, try again");
+            return null;
+        }
         catch (Exception ex) {
             Note.e(TAG, "Exception getting track list", ex);
             announce(context, fromActivity, "Oops, try again");
