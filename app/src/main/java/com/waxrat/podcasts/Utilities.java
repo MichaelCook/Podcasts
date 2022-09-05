@@ -51,7 +51,7 @@ public class Utilities {
                         Log.i(TAG, "Got |" + line + "|");
                         PASSWORD = line;
                     }
-                };
+                }
             } catch (FileNotFoundException e) {
                 Note.w(TAG, "No file " + file);
             } catch (IOException e) {
