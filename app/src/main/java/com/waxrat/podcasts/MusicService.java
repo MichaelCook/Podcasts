@@ -108,10 +108,12 @@ implements OnCompletionListener,
     public static final String ACTION_PLAY_STATE = "com.waxrat.podcasts.intent.PLAY_STATE";
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
 
+    private static final int UPDATE_PERIOD_MS = 1000;
+
     private final Runnable activityUpdater = new Runnable() {
         public void run() {
             updateActivity();
-            tickHandler.postDelayed(this, 1000);
+            tickHandler.postDelayed(this, UPDATE_PERIOD_MS);
         }
     };
 
@@ -647,9 +649,9 @@ implements OnCompletionListener,
             Note.w(TAG, "onCompletion: no current track");
         else {
             int remMs = track.durMs - track.curMs;
-            spurious = remMs > 900;
+            spurious = remMs > UPDATE_PERIOD_MS;
             if (spurious)
-                Log.w(TAG, "Spurious completion of " + track + " with " + remMs);
+                Note.w(TAG, "Spurious completion of " + track + " with " + remMs);
             else {
                 track.curMs = track.durMs;
                 Tracks.writeState(this, "onCompletion");

@@ -103,7 +103,6 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private TextView mRemainingText;
     private Button mAfterTrackButton;
     private CheckBox mKeepScreenOnCheckBox;
-    private boolean mAskPermissions = true;
     private TrackArrayAdapter mTrackArrayAdapter;
 
     private final static String AFTER_TRACK_PREF = "afterTrack";
@@ -299,13 +298,6 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     private String describeBluetoothDevice(@NonNull BluetoothDevice dev) {
         if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            // TODO: Consider calling
-            //    Activity#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for Activity#requestPermissions for more details.
             Note.w(TAG, "describeBluetoothDevice: No permission");
             return "(no permission)";
         }
@@ -373,16 +365,31 @@ public class MainActivity extends ListActivity implements OnClickListener,
         if (mAskPermissions) {
             mAskPermissions = false;
             int requestCode = 1;  // passed to onRequestPermissionsResult but actually unused
-            requestPermissions(new String[]{
-                    Manifest.permission.READ_PHONE_STATE,
-                    Manifest.permission.BLUETOOTH,
-            }, requestCode);
+            requestPermissions(mPermissionsToRequest, requestCode);
         }
 
         /* We pass fromActivity=false here because the user hasn't explicitly
            asked for the download in this situation */
         if (Downloader.okayToDownload(this, false))
             Downloader.downloadNow(this, "resume", false, -1, false, null);
+    }
+
+    private boolean mAskPermissions = true;
+    private static final String[] mPermissionsToRequest = new String[] {
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.BLUETOOTH,
+        Manifest.permission.BLUETOOTH_CONNECT,
+    };
+
+    private boolean needAnyPermissions() {
+        boolean needAny = false;
+        for (String permission : mPermissionsToRequest) {
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                Note.w(TAG, "Permission not yet granted: " + permission);
+                needAny = true;
+            }
+        }
+        return needAny;
     }
 
     @Override
@@ -437,7 +444,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mKeepScreenOnCheckBox.setOnClickListener(this);
 
         mAutoScroll = true;
-        mAskPermissions = true;
+        mAskPermissions = needAnyPermissions();
 
         mReceiver = new ReceiveMessages();
         registerReceiver(mReceiver, new IntentFilter(MusicService.ACTION_PLAY_STATE));
