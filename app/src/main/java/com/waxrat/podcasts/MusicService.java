@@ -651,7 +651,7 @@ implements OnCompletionListener,
             int remMs = track.durMs - track.curMs;
             spurious = remMs > UPDATE_PERIOD_MS;
             if (spurious)
-                Note.w(TAG, "Spurious completion of " + track + " with " + remMs);
+                Log.w(TAG, "Spurious completion of " + track + " with " + remMs);
             else {
                 track.curMs = track.durMs;
                 Tracks.writeState(this, "onCompletion");

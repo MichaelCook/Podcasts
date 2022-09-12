@@ -433,8 +433,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mKeepScreenOnCheckBox = findViewById(R.id.keepScreenOn);
 
         mRemainingText.setOnClickListener(this);
+        mRemainingText.setOnLongClickListener(this);
         mPlayButton.setOnClickListener(this);
-        //mPlayButton.setOnLongClickListener(this);
+        mPlayButton.setOnLongClickListener(this);
         mForwardButton.setOnClickListener(this);
         mRewindButton.setOnClickListener(this);
         mForwardButton.setOnLongClickListener(this);
@@ -442,6 +443,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mSeekBar.setOnSeekBarChangeListener(this);
         mAfterTrackButton.setOnClickListener(this);
         mKeepScreenOnCheckBox.setOnClickListener(this);
+        mKeepScreenOnCheckBox.setOnLongClickListener(this);
 
         mAutoScroll = true;
         mAskPermissions = needAnyPermissions();
@@ -582,7 +584,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
             setKeepScreenOn();
             return;
         }
-        Note.w(TAG, "Unexpected onClick target " + target);
+        Note.w(TAG, "Unhandled click: " + target);
     }
 
     @NonNull
@@ -638,6 +640,21 @@ public class MainActivity extends ListActivity implements OnClickListener,
             askTo(MusicService.ACTION_SKIP_TO_TRACK_START);
             return true; // consumed the click
         }
+        if (target == mRemainingText) {
+            askScrollToPriority();
+            return true; // consumed the click
+        }
+        if (target == mPlayButton) {
+            setAutoScroll(true);
+            playPriorityA();
+            return true; // consumed the click
+        }
+        if (target == mKeepScreenOnCheckBox) {
+            setAutoScroll(true);
+            deleteFinished();
+            return true; // consumed the click
+        }
+        Note.w(TAG, "Unhandled long click: " + target);
         return false; // didn't consume the click
     }
 
@@ -922,8 +939,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     CharSequence[] pcs = Tracks.priorityClasses();
                     String pc = pcs[which].toString();
                     int pos = Tracks.findPriorityClass(pc, false);
-                    if (pos != -1)
+                    if (pos != -1) {
+                        setAutoScroll(false);
                         getListView().smoothScrollToPositionFromTop(pos, 0);
+                    }
                     dialog.dismiss();
                 });
         alert.show();
@@ -958,8 +977,12 @@ public class MainActivity extends ListActivity implements OnClickListener,
         startDownload(0, false);
     }
 
+    private boolean isPlaying(@NonNull Track track) {
+        return MusicService.playing() && track == Tracks.currentTrack();
+    }
+
     private void askDeleteTrack(@NonNull Track track) {
-        if (MusicService.playing() && track == Tracks.currentTrack()) {
+        if (isPlaying(track)) {
             toastShort("Can't delete the playing track");
             return;
         }
@@ -967,7 +990,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         confirm("Delete \"" + track.title + '"',
                 (dialog, id) -> {
                     // Currently playing track may have changed since we checked above...
-                    if (MusicService.playing() && track == Tracks.currentTrack()) {
+                    if (isPlaying(track)) {
                         toastShort("Can't delete the playing track");
                         return;
                     }
@@ -987,7 +1010,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         }
         confirm("Rewind \"" + track.title + '"',
                 (dialog, id) -> {
-                    if (MusicService.playing() && Tracks.currentTrack() == track) {
+                    if (isPlaying(track)) {
                         Log.i(TAG, "Rewind currently playing track");
                         askTo(MusicService.ACTION_SKIP_TO_TRACK_START);
                     }
@@ -1090,54 +1113,69 @@ public class MainActivity extends ListActivity implements OnClickListener,
         playTrack(pos, true);
     }
 
-    static final CharSequence[] mainMenuItems = new CharSequence[] {
-        "Delete finished",            // 0
-        "Download all",               // 1
-        "Download all and play",      // 2
-        "Download none",              // 3
-        "Rewind all",                 // 4
-        autoDownloadOnWifiLabel(true), // 5
-        "Scroll to priority",         // 6
-        "Status",                     // 7
-        "Play priority A",            // 8
-    };
+    private static final int
+        MAIN_MENU_DELETE_FINISHED = 0,
+        MAIN_MENU_DOWNLOAD_ALL = 1,
+        MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 2,
+        MAIN_MENU_DOWNLOAD_NONE = 3,
+        MAIN_MENU_REWIND_ALL = 4,
+        MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI = 5,
+        MAIN_MENU_SCROLL_TO_PRIORITY = 6,
+        MAIN_MENU_STATUS = 7,
+        MAIN_MENU_PLAY_PRIORITY_A = 8,
+        MAIN_MENU_SIZE = 9;
 
     private void showMainMenu() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Podcasts");
         builder.setCancelable(true);
-        mainMenuItems[5] = autoDownloadOnWifiLabel(!Downloader.mAutoDownloadOnWifi);
-        builder.setItems(mainMenuItems, (dialog, which) -> {
+
+        CharSequence[] mi = new CharSequence[MAIN_MENU_SIZE];
+        mi[MAIN_MENU_DELETE_FINISHED] = Tracks.anyFinishedDeletable()
+            ? "Delete finished" : "(Delete finished)";
+        mi[MAIN_MENU_DOWNLOAD_ALL] = "Download all";
+        mi[MAIN_MENU_DOWNLOAD_ALL_AND_PLAY] = "Download all and play";
+        mi[MAIN_MENU_DOWNLOAD_NONE] = "Download none";
+        mi[MAIN_MENU_REWIND_ALL] = Tracks.numRewindable() != 0
+            ? "Rewind all" : "(Rewind all)";
+        mi[MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI] = autoDownloadOnWifiLabel(!Downloader.mAutoDownloadOnWifi);
+        mi[MAIN_MENU_SCROLL_TO_PRIORITY] = "Scroll to priority";
+        mi[MAIN_MENU_STATUS] = "Status";
+        mi[MAIN_MENU_PLAY_PRIORITY_A] = Tracks.findPriorityClass("A", true) != -1
+            ? "Play priority A" : "(Play priority A)";
+
+        builder.setItems(mi, (dialog, which) -> {
             switch (which) {
-                case 0: // "Delete finished"
+                case MAIN_MENU_DELETE_FINISHED:
                     setAutoScroll(true);
                     deleteFinished();
                     break;
-                case 1: // "Download all"
+                case MAIN_MENU_DOWNLOAD_ALL:
                     maybeAskDownload(-1, false);
                     break;
-                case 2: // "Download all and play"
+                case MAIN_MENU_DOWNLOAD_ALL_AND_PLAY:
                     if (mIsDriving)
                         drivingDownload(-1);
                     else
                         maybeAskDownload(-1, true);
                     break;
-                case 3: // "Download none"
+                case MAIN_MENU_DOWNLOAD_NONE:
                     downloadNone();
                     break;
-                case 4: // "Rewind"
+                case MAIN_MENU_REWIND_ALL:
                     askRewindAll();
                     break;
-                case 5: // "Auto download on Wi-Fi"
+                case MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI:
                     setAutoDownloadOnWifi(!Downloader.mAutoDownloadOnWifi);
                     break;
-                case 6: // "Scroll to priority"
+                case MAIN_MENU_SCROLL_TO_PRIORITY:
                     askScrollToPriority();
                     break;
-                case 7: // "Status"
+                case MAIN_MENU_STATUS:
                     showStatus();
                     break;
-                case 8: // "Play priority A"
+                case MAIN_MENU_PLAY_PRIORITY_A:
+                    setAutoScroll(true);
                     playPriorityA();
                     break;
             }
@@ -1146,44 +1184,57 @@ public class MainActivity extends ListActivity implements OnClickListener,
         builder.show();
     }
 
-    static final CharSequence[] trackMenuItems = new CharSequence[] {
-        "Info",                 // 0
-        "Delete",               // 1
-        "Move to top",          // 2
-        "Rewind",               // 3
-        "Download",             // 4
-        "Download and play",    // 5
-    };
+    private static final int
+        TRACK_MENU_INFO = 0,
+        TRACK_MENU_DELETE = 1,
+        TRACK_MENU_MOVE_TO_TOP = 2,
+        TRACK_MENU_REWIND = 3,
+        TRACK_MENU_DOWNLOAD = 4,
+        TRACK_MENU_DOWNLOAD_AND_PLAY = 5,
+        TRACK_MENU_SIZE = 6;
 
     private void showTrackMenu(final int position) {
         Track track = Tracks.track(position);
         if (track == null)
             return;
 
+        CharSequence[] mi = new CharSequence[TRACK_MENU_SIZE];
+        mi[TRACK_MENU_INFO] = "Info";
+        mi[TRACK_MENU_DELETE] = ! isPlaying(track) ?
+            "Delete" : "(Delete)";
+        mi[TRACK_MENU_MOVE_TO_TOP] = position != 0
+            ? "Move to top" : "(Move to top)";
+        mi[TRACK_MENU_REWIND] = track.curMs != 0
+            ? "Rewind" : "(Rewind)";
+        mi[TRACK_MENU_DOWNLOAD] = ! track.downloaded
+            ? "Download" : "(Download)";
+        mi[TRACK_MENU_DOWNLOAD_AND_PLAY] = ! track.downloaded
+            ? "Download and play" : "(Download and play)";
+
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Track Menu");
         builder.setCancelable(true);
-        builder.setItems(trackMenuItems, (dialog, which) -> {
+        builder.setItems(mi, (dialog, which) -> {
             switch (which) {
-                case 0: // "Info"
+                case TRACK_MENU_INFO:
                     showTrackInfo(track);
                     break;
-                case 1: // "Delete"
+                case TRACK_MENU_DELETE:
                     askDeleteTrack(track);
                     break;
-                case 2: // "Move to top"
+                case TRACK_MENU_MOVE_TO_TOP:
                     askMoveTrackToTop(track);
                     break;
-                case 3: // "Rewind"
+                case TRACK_MENU_REWIND:
                     askRewindTrack(track);
                     break;
-                case 4: // "Download"
+                case TRACK_MENU_DOWNLOAD:
                     if (track.downloaded)
                         Note.toastLong(this, "Track is already downloaded");
                     else
                         startDownload(track.ident, false);
                     break;
-                case 5: // "Download and play"
+                case TRACK_MENU_DOWNLOAD_AND_PLAY:
                     if (track.downloaded)
                         Note.toastLong(this, "Track is already downloaded");
                     else

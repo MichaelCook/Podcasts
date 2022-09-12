@@ -625,18 +625,28 @@ class Tracks {
     // Tracks with this emoji won't be automatically deleted
     private static final String KEEP_EMOJI = "🌟";
 
+    static private boolean isFinishedDeletable(@NonNull Track track) {
+        if (track.emoji != null && track.emoji.contains(KEEP_EMOJI))
+            return false;
+        if (track.durMs == 0)
+            return false;
+        return track.isFinished();
+    }
+
+    static synchronized boolean anyFinishedDeletable() {
+        for (Track track : tracks)
+            if (isFinishedDeletable(track))
+                return true;
+        return false;
+    }
+
     static synchronized int deleteFinished(@NonNull Context context) {
         int numDeleted = 0;
-        for (Track t : tracks) {
-            if (t.emoji != null && t.emoji.contains(KEEP_EMOJI))
-                continue;
-            if (t.durMs == 0)
-                continue;
-            if (!t.isFinished())
-                continue;
-            t.deleteFiles(context);
-            ++numDeleted;
-        }
+        for (Track t : tracks)
+            if (isFinishedDeletable(t)) {
+                t.deleteFiles(context);
+                ++numDeleted;
+            }
         return numDeleted;
     }
 
