@@ -41,6 +41,8 @@ import java.io.File;
 final class Track {
     private final static String TAG = "Podcasts.Track";
 
+    static final int TOP_PRIORITY_CLASS = '=';
+
     @NonNull final String ident;
     @NonNull String title;
     @NonNull String artist;
@@ -138,6 +140,10 @@ final class Track {
 
     boolean isFinished() {
         return remMs() == 0;
+    }
+
+    boolean isTopPriority() {
+        return priorityClassChar() == TOP_PRIORITY_CLASS;
     }
 
     @NonNull

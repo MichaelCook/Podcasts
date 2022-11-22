@@ -72,14 +72,35 @@ public final class Downloader extends Worker {
 
     private final static String TAG = "Podcasts.Downloader";
 
-    static final String ACTION_DOWNLOAD_STATE = "com.waxrat.podcasts.intent.DOWNLOAD_STATE";
+    static final String ACTION_DOWNLOAD_MESSAGE = "com.waxrat.podcasts.intent.DOWNLOAD_MESSAGE";
     static final String COMMAND_EXTRA = "command";
     static final String COMMAND_DOWNLOAD = "download";
     static final String COMMAND_DELETE_TRACK = "delete-track";
-    static final String FROM_ACTIVITY_EXTRA = "from-activity";
+    static final String FORCE_EXTRA = "force"; // download even if not on Wi-Fi
     static final String MAX_TRACKS_EXTRA = "max-tracks";
     static final String THEN_START_EXTRA = "then-start";
     static final String IDENT_EXTRA = "ident";
+
+    static final String ACTION_DOWNLOAD_STATUS = "com.waxrat.podcasts.intent.DOWNLOAD_STATUS";
+    static final String IDLE_STATUS = "idle";
+    static final String POLLING_STATUS = "polling";
+    static final String DOWNLOADING_STATUS = "downloading";
+    static final String STATUS_STATUS_EXTRA = "status";
+    static final String TRACK_NUM_STATUS_EXTRA = "track-num";
+    static final String NUM_TRACKS_STATUS_EXTRA = "num-tracks";
+
+    private static void broadcastStatus(@NonNull Context context,
+            @NonNull String status, int trackNum, int numTracks) {
+        Intent i = new Intent(ACTION_DOWNLOAD_STATUS);
+        i.putExtra(STATUS_STATUS_EXTRA, status);
+        i.putExtra(TRACK_NUM_STATUS_EXTRA, trackNum);
+        i.putExtra(NUM_TRACKS_STATUS_EXTRA, numTracks);
+        context.sendBroadcast(i);
+    }
+
+    private static void broadcastStatus(@NonNull Context context, @NonNull String status) {
+        broadcastStatus(context, status, -1, -1);
+    }
 
     public Downloader(@NonNull Context context, @NonNull WorkerParameters params) {
         super(context, params);
@@ -102,15 +123,15 @@ public final class Downloader extends Worker {
 
     static void downloadNow(@NonNull Context context,
                             @NonNull String label,
-                            boolean fromActivity,
+                            boolean force, // download even if not on Wi-Fi
                             int maxTracks,
                             boolean thenStart,
                             @Nullable String onlyIdent) {
         Log.i(TAG, "downloadNow...");
         Data.Builder db = new Data.Builder();
         db.putString(COMMAND_EXTRA, COMMAND_DOWNLOAD);
-        if (fromActivity)
-            db.putBoolean(FROM_ACTIVITY_EXTRA, true);
+        if (force)
+            db.putBoolean(FORCE_EXTRA, true);
         if (maxTracks != -1)
             db.putInt(MAX_TRACKS_EXTRA, maxTracks);
         if (thenStart)
@@ -212,12 +233,10 @@ public final class Downloader extends Worker {
        the activity can display the message.  Otherwise, the message is lost
        except in the logs, which is presumed to be okay (e.g., if we're
        running because AlarmManager invoked us). */
-    private static void announce(@NonNull Context context, boolean fromActivity, @NonNull String message) {
-        if (fromActivity) {
-            Intent i = new Intent(ACTION_DOWNLOAD_STATE);
-            i.putExtra("message", message);
-            context.sendBroadcast(i);
-        }
+    private static void announce(@NonNull Context context, @NonNull String message) {
+        Intent i = new Intent(ACTION_DOWNLOAD_MESSAGE);
+        i.putExtra("message", message);
+        context.sendBroadcast(i);
     }
 
     private static class TagsComparator implements Comparator<Tags> {
@@ -232,15 +251,16 @@ public final class Downloader extends Worker {
     }
     private static final TagsComparator TAGS_COMPARATOR = new TagsComparator();
 
-    private void downloadTags(@NonNull Context context, boolean fromActivity) {
+    private void downloadTags(@NonNull Context context) {
         Tags[] downloads;
         try {
-            if (fromActivity) {
-                mNotificationManager.cancelAll();
-                notification(context, NOTIFY_DOWNLOADING, "Checking...",
-                        android.R.drawable.stat_sys_download);
-            }
-            downloads = tagsToDownload(context, fromActivity);
+            broadcastStatus(context, POLLING_STATUS);
+
+            mNotificationManager.cancelAll();
+            notification(context, NOTIFY_DOWNLOADING, "Checking...",
+                    android.R.drawable.stat_sys_download);
+
+            downloads = tagsToDownload(context);
         }
         catch (Exception e) {
             Note.e(TAG, "checkDownloads - exception", e);
@@ -249,6 +269,7 @@ public final class Downloader extends Worker {
             return;
         }
         finally {
+            broadcastStatus(context, IDLE_STATUS);
             mNotificationManager.cancel(NOTIFY_DOWNLOADING);
         }
 
@@ -262,8 +283,14 @@ public final class Downloader extends Worker {
         Tracks.restore(context, true);
     }
 
-    private void downloadAudios(@NonNull Context context, boolean fromActivity, int maxToDownload,
-                                boolean thenStart, @Nullable String onlyIdent) {
+    private void downloadAudios(@NonNull Context context,
+                                boolean force,
+                                int maxToDownload,
+                                boolean thenStart,
+                                @Nullable String onlyIdent) {
+        if (!force && downloadDiscouraged(context)) {
+            return;
+        }
         try {
             int numToDownload = 0;
             int numDownloaded = 0;
@@ -288,16 +315,16 @@ public final class Downloader extends Worker {
             else {
                 Track[] downloadable = Tracks.downloadable();
                 if (downloadable == null)
-                    announce(context, fromActivity, "No tracks to download");
+                    Log.i(TAG, "No tracks to download");
                 else {
                     numToDownload = downloadable.length;
                     for (Track track : downloadable) {
                         if (maxToDownload != -1 && numDownloaded >= maxToDownload) {
-                            Log.i(TAG, "Reached maxToDownload limit");
+                            Log.i(TAG, "Reached download limit");
                             break;
                         }
-                        if (!okayToDownload(context, fromActivity)) {
-                            trouble = true;
+                        if (!force && downloadDiscouraged(context)) {
+                            trouble = true; // Lost Wi-Fi while we were downloading
                             break;
                         }
                         if (!downloadAudio(context, track, thenStart, numDownloaded + 1, numToDownload)) {
@@ -331,14 +358,12 @@ public final class Downloader extends Worker {
         }
     }
 
-    private void checkDownloads(@NonNull Context context, boolean fromActivity, int maxToDownload,
+    private void checkDownloads(@NonNull Context context, boolean force, int maxToDownload,
                                 boolean thenStart, @Nullable String onlyIdent) {
-        Log.i(TAG, "checkDownload: fromActivity=" + fromActivity + ", maxToDownload=" +
-                maxToDownload + ", thenStart=" + thenStart);
+        Log.i(TAG, "checkDownload: maxToDownload=" + maxToDownload + ", thenStart=" + thenStart);
 
-        downloadTags(context, fromActivity);
-        if (okayToDownload(context, fromActivity))
-            downloadAudios(context, fromActivity, maxToDownload, thenStart, onlyIdent);
+        downloadTags(context);
+        downloadAudios(context, force, maxToDownload, thenStart, onlyIdent);
     }
 
     private void doCommand() {
@@ -377,17 +402,16 @@ public final class Downloader extends Worker {
     private void commandDownload(@NonNull Context context) {
         Data data = getInputData();
 
-        // from-activity: true if this intent was sent from an activity and so we can
-        // toast and generate notifications at will.
-        boolean fromActivity = data.getBoolean(FROM_ACTIVITY_EXTRA, false);
-
         // max-tracks: The maximum number of tracks to download. -1 means no maximum.
         // Otherwise, download no more than this number
         int maxTracks = data.getInt(Downloader.MAX_TRACKS_EXTRA, -1);
 
-        Log.i(TAG, "commandDownload fromActivity=" + fromActivity + " maxTracks=" + maxTracks);
+        // force: Download tracks even if not on Wi-Fi
+        boolean force = data.getBoolean(Downloader.FORCE_EXTRA, false);
 
-        if (!okayToDownload(context, fromActivity))
+        Log.i(TAG, "commandDownload force=" + force + ", maxTracks=" + maxTracks);
+
+        if (!force && downloadDiscouraged(context))
             maxTracks = 0;
 
         // then-start: If true, then after finishing the download, start playing the 1st track
@@ -408,7 +432,7 @@ public final class Downloader extends Worker {
                 Note.w(TAG, "Oops, running=" + running);
             else {
                 wakeLock.acquire(10 * 60 * 1000L /*10 minutes*/);
-                checkDownloads(context, fromActivity, maxTracks, thenStart, ident);
+                checkDownloads(context, force, maxTracks, thenStart, ident);
             }
         }
         finally {
@@ -445,22 +469,17 @@ public final class Downloader extends Worker {
         return !cm.isActiveNetworkMetered();
     }
 
-    static boolean okayToDownload(@NonNull Context context, boolean fromActivity) {
-        if (fromActivity) {
-            // The user requested the download, do it regardless
-            Log.i(TAG, "From activity, okay to download");
+    static boolean downloadDiscouraged(@NonNull Context context) {
+        if (!isWifi(context)) {
+            Log.i(TAG, "Not on Wi-Fi, download discouraged");
             return true;
         }
-        if (!isWifi(context)) {
-            Log.i(TAG, "Not on Wi-Fi, not okay to download");
-            return false;
-        }
         if (!mAutoDownloadOnWifi) {
-            Log.i(TAG, "Not autoDownloadOnWifi, not okay to download");
-            return false;
+            Log.i(TAG, "Not autoDownloadOnWifi, download discouraged");
+            return true;
         }
-        Log.i(TAG, "On Wi-Fi, okay to download");
-        return true;
+        Log.i(TAG, "On Wi-Fi, download not discouraged");
+        return false;
     }
 
     private final static String UPDATE_URL = "http://www.waxrat.com/podcasts.php";
@@ -473,7 +492,7 @@ public final class Downloader extends Worker {
         spec.append(Utilities.urlEncode(Utilities.password(context)));
         if (Tracks.haveTracks()) {
             spec.append("&r=");
-            spec.append(Tracks.remainingSeconds());
+            spec.append((Tracks.remMs() + 500) / 1000);
         }
         if (since != -1) {
             spec.append("&s=");
@@ -498,13 +517,13 @@ public final class Downloader extends Worker {
     private static int since = -1;
 
     @Nullable
-    private Tags[] tagsToDownload(@NonNull Context context, boolean fromActivity) {
+    private Tags[] tagsToDownload(@NonNull Context context) {
         // Check the web server to see if new tracks are available.
         BufferedReader br = null;
         ArrayList<Tags> downloads = new ArrayList<>();
         int tracksOnServer = -1;
         try {
-            TcpService.broadcast(TcpService.NFY_POLLING_FOR_TRACKS, "START", String.valueOf(fromActivity));
+            TcpService.broadcast(TcpService.NFY_POLLING_FOR_TRACKS, "START");
             URL url = makePollUrl(context, since);
             Log.i(TAG, "URL " + url);
             HttpURLConnection h = (HttpURLConnection) url.openConnection();
@@ -514,14 +533,14 @@ public final class Downloader extends Worker {
             String contentType = h.getContentType();
             if (contentType == null) {
                 Log.w(TAG, "No Content-Type");
-                announce(context, fromActivity, "Oops, no content type");
+                announce(context, "Oops, no content type");
                 return null;
             }
             if (!contentType.equals("text/plain") && !contentType.startsWith("text/plain;")) {
                 /* This might happen if we're connected to a Wi-Fi captive portal
                    and haven't authorized yet. */
                 Note.e(TAG, "Wrong Content-Type |" + contentType + '|');
-                announce(context, fromActivity, "Oops, wrong content type: " + contentType);
+                announce(context, "Oops, wrong content type: " + contentType);
                 return null;
             }
             /*
@@ -538,7 +557,7 @@ public final class Downloader extends Worker {
                 if (line == null) {
                     /* This, too, indicates we're not connected to the server we expect */
                     Note.e(TAG, "No OK");
-                    announce(context, fromActivity, "Oops, no OK");
+                    announce(context, "Oops, no OK");
                     return null;
                 }
                 if (line.startsWith("OK\t")) {
@@ -547,7 +566,7 @@ public final class Downloader extends Worker {
                     if (line != null) {
                         /* This, too, indicates we're not connected to the server we expect */
                         Note.e(TAG, "Extra output |" + line + '|');
-                        announce(context, fromActivity, "Oops, extra: " + line);
+                        announce(context, "Oops, extra: " + line);
                         return null;
                     }
                     if (!tagLines.isEmpty()) {
@@ -577,30 +596,30 @@ public final class Downloader extends Worker {
         catch (java.net.UnknownHostException ex) {
             // Likely transient networking problem
             Log.i(TAG, "UnknownHostException");
-            announce(context, fromActivity, "Unknown host, try again");
+            announce(context, "Unknown host, try again");
             return null;
         }
         catch (java.net.ConnectException ex) {
             // Likely transient networking problem
             Log.i(TAG, "ConnectException");
-            announce(context, fromActivity, "Connect failed, try again");
+            announce(context, "Connect failed, try again");
             return null;
         }
         catch (java.net.SocketTimeoutException ex) {
             // Likely transient networking problem
             Log.i(TAG, "SocketTimeoutException");
-            announce(context, fromActivity, "Socket timeout, try again");
+            announce(context, "Socket timeout, try again");
             return null;
         }
         catch (java.net.NoRouteToHostException ex) {
             // Likely transient networking problem
             Log.i(TAG, "NoRouteToHostException");
-            announce(context, fromActivity, "No route to host, try again");
+            announce(context, "No route to host, try again");
             return null;
         }
         catch (Exception ex) {
             Note.e(TAG, "Exception getting track list", ex);
-            announce(context, fromActivity, "Oops, try again");
+            announce(context, "Oops, try again");
             return null;
         }
         finally {
@@ -642,6 +661,8 @@ public final class Downloader extends Worker {
             Note.w(TAG, "Could not delete pre-existing destination file: " + dest);
             return false;
         }
+
+        broadcastStatus(context, DOWNLOADING_STATUS, downloadIndex, numDownloads);
 
         NotificationCompat.Builder nb = notification(context, NOTIFY_DOWNLOADING, "Get...",
                 (downloadIndex) + " of " + numDownloads + ": " + track.artist,
@@ -721,6 +742,7 @@ public final class Downloader extends Worker {
                 catch (IOException ex) {
                     Note.e(TAG, "Exception closing output download " + dest, ex);
                 }
+            broadcastStatus(context, IDLE_STATUS);
             TcpService.broadcast(TcpService.NFY_DOWNLOADING_TRACK, "FINISH",
                     String.valueOf(track.size),
                     String.valueOf(downloadedSize));

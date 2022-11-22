@@ -219,7 +219,7 @@ class Tracks {
         sb.append('\n');
 
         for (Track track : tracks) {
-            if (track.curMs == 0)
+            if (track.curMs < 20000)    // if not yet started or only barely started, forget it
                 continue;
             sb.append(track.ident);
             sb.append('\t');
@@ -446,6 +446,12 @@ class Tracks {
         return copy;
     }
 
+    @NonNull
+    static List<Track> copyTracks()
+    {
+        return copyTracks(new ArrayList<Track>());
+    }
+
     private static class TrackComparator implements Comparator<Track> {
         // Compare two tracks for sort order.
         // See also Track.order() in Track.py
@@ -595,11 +601,11 @@ class Tracks {
         writeState(context, "rewind");
     }
 
-    static synchronized int remainingSeconds() {
-        int remMs = 0;
+    static synchronized int remMs() {
+        int ms = 0;
         for (Track t : tracks)
-            remMs += t.remMs();
-        return (remMs + 500) / 1000;
+            ms += t.remMs();
+        return ms;
     }
 
     static synchronized int numTracks() {
@@ -634,10 +640,7 @@ class Tracks {
     }
 
     static synchronized boolean anyFinishedDeletable() {
-        for (Track track : tracks)
-            if (isFinishedDeletable(track))
-                return true;
-        return false;
+        return tracks.stream().anyMatch(Tracks::isFinishedDeletable);
     }
 
     static synchronized int deleteFinished(@NonNull Context context) {
@@ -658,34 +661,32 @@ class Tracks {
             return;
 
         int place = 0;
-        if (track.priorityClassChar() == '=') {
-            // `track` is already in the top group (where priority class is '=').
-            // Move `track` to the very top
+        if (track.isTopPriority()) {
+            // `track` is already in the top group.  Move it to the very top
             int i = 0;
             for (Track t : tracks) {
                 if (t == track)
                     continue;
                 if (t.priority.isEmpty())
                     continue;
-                if ('=' != t.priority.charAt(0))
+                if (!t.isTopPriority())
                     continue;
                 ++i;
-                t.priority = String.format("=%04d", i);
+                t.priority = String.format("%c%04d", Track.TOP_PRIORITY_CLASS, i);
                 Tracks.notifyTrackUpdated(t);
                 Tags.setPriority(context, t.ident, t.priority);
             }
         }
         else {
-            // `track` is not already in the top group (where the priority class is '=').
-            // Move `track` to the bottom of the top group
+            // `track` is not already in the top group.  Move it to the bottom of the top group
             int i = 0;
             for (Track t : tracks) {
                 ++i;
-                if (t.priorityClassChar() == '=')
+                if (t.isTopPriority())
                     place = i;
             }
         }
-        track.priority = String.format("=%04d", place);
+        track.priority = String.format("%c%04d", Track.TOP_PRIORITY_CLASS, place);
         Tracks.notifyTrackUpdated(track);
         Tags.setPriority(context, track.ident, track.priority);
 
@@ -694,22 +695,12 @@ class Tracks {
         writeState(context, "moveToTop");
     }
 
-    static synchronized CharSequence[] priorityClasses() {
-        ArrayList<CharSequence> pcs = new ArrayList<>();
-        for (Track track : tracks) {
-            String pc = track.priorityClass();
-            if (Utilities.find(pcs, pc) == -1)
-                pcs.add(pc);
-        }
-        return pcs.toArray(new CharSequence[0]);
-    }
-
-    static synchronized int findPriorityClass(@NonNull String pc, boolean unfinished) {
+    static synchronized int findPriorityClass(char pc, boolean unfinished) {
         int pos = 0;
         for (Track track : tracks) {
             if (unfinished && track.isFinished())
                 continue;
-            if (pc.equals(track.priorityClass()))
+            if (pc == track.priorityClassChar())
                 return pos;
             ++pos;
         }

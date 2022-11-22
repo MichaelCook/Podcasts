@@ -342,24 +342,23 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd));
                     continue;
                 }
-                // DOWNLOAD-TRACKS from-activity max-tracks then-start
+                // DOWNLOAD-TRACKS force max-tracks then-start
                 if (cmd.equals("DOWNLOAD-TRACKS") && f.length <= 4) {
-                    boolean fromActivity = false;
+                    boolean force = false;
                     int maxTracks = -1;
                     boolean thenStart = false;
 
                     int i = 0;
                     if (++i < f.length)
-                        fromActivity = Boolean.parseBoolean(f[i]);
+                        force = Boolean.parseBoolean(f[i]);
                     if (++i < f.length)
                         maxTracks = Integer.parseInt(f[i]);
                     if (++i < f.length)
                         thenStart = Boolean.parseBoolean(f[i]);
 
-                    Log.i(TAG, "Download " + fromActivity + " " + maxTracks + " " + thenStart);
-                    Downloader.downloadNow(mContext, "tcp", fromActivity, maxTracks, thenStart, null);
-                    sendLine(makeLine("OK", cmd, String.valueOf(fromActivity), String.valueOf(maxTracks),
-                                      String.valueOf(thenStart)));
+                    Log.i(TAG, "Download " + maxTracks + " " + thenStart);
+                    Downloader.downloadNow(mContext, "tcp", force, maxTracks, thenStart, null);
+                    sendLine(makeLine("OK", cmd, String.valueOf(maxTracks), String.valueOf(thenStart)));
                     continue;
                 }
                 if (cmd.equals("SET-TRACK-PRIORITY") && f.length == 3) {

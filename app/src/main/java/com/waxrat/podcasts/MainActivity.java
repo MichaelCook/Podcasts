@@ -59,8 +59,6 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.app.ListActivity;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -68,8 +66,10 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.telephony.TelephonyManager;
 import android.util.Log;
@@ -101,6 +101,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private Button mRewindButton;
     private SeekBar mSeekBar;
     private TextView mRemainingText;
+    private TextView mDownloadableIndicator;
+    private TextView mAutoscrollIndicator;
     private Button mAfterTrackButton;
     private CheckBox mKeepScreenOnCheckBox;
     private TrackArrayAdapter mTrackArrayAdapter;
@@ -121,12 +123,48 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     private boolean mAutoScroll = true;
 
-    private void setAutoScroll(boolean enable) {
-        if (enable != mAutoScroll) {
-            mAutoScroll = enable;
-            Log.d(TAG, "auto-scroll: " + enable);
-        }
+    private void setAutoScrollForce(boolean enable) {
+        mAutoScroll = enable;
+        Log.d(TAG, "auto-scroll: " + enable);
+        mAutoscrollIndicator.setText(enable ? "" : "no autoscroll");
     }
+
+    private void setAutoScroll(boolean enable) {
+        if (enable != mAutoScroll)
+            setAutoScrollForce(enable);
+    }
+
+    // ---- download status indicator ----
+
+    private @NonNull String mDownloadStatus = Downloader.IDLE_STATUS;
+    private int mDownloadTrackNum = -1;
+    private int mDownloadNumTracks = -1;
+
+    private void setDownloadable() {
+        Log.d(TAG, "setDownloadable " + mDownloadStatus + " " + mDownloadTrackNum + " " + mDownloadNumTracks);
+        String msg = "";
+        switch (mDownloadStatus) {
+        case Downloader.POLLING_STATUS:
+            msg = "polling";
+            break;
+        case Downloader.DOWNLOADING_STATUS:
+            msg = "downloading " + mDownloadTrackNum + " of " + mDownloadNumTracks;
+            break;
+        case Downloader.IDLE_STATUS: {
+            int num = Tracks.numDownloadable();
+            if (num != 0)
+                msg = num + " downloadable";
+            break;
+        }
+        default:
+            Note.e(TAG, "setDownloadable: " + mDownloadStatus);
+            msg = "error";
+            break;
+        }
+        mDownloadableIndicator.setText(msg);
+    }
+
+    // ---- seek bar ----
 
     private void clearSeekBar() {
         mSeekBar.setMax(0);
@@ -144,14 +182,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
             clearSeekBar();
             return;
         }
-        int remSec = (t.remMs() + 500) / 1000;
-        if (remSec < 0) {
-            clearSeekBar();
-            return;
-        }
         mSeekBar.setMax(t.durMs);
         mSeekBar.setProgress(t.curMs);
-        mRemainingText.setText(String.format(Locale.US, "%d:%02d", remSec / 60, remSec % 60));
+        mRemainingText.setText(Utilities.mmss(t.remMs()));
         if (mTrackArrayAdapter != null)
             mTrackArrayAdapter.notifyDataSetChanged();
     }
@@ -206,6 +239,18 @@ public class MainActivity extends ListActivity implements OnClickListener,
         startService(in);
     }
 
+    private void onDownloadStatus(@NonNull Intent intent) {
+        String status = intent.getStringExtra(Downloader.STATUS_STATUS_EXTRA);
+        if (status == null) {
+            Note.w(TAG, "No STATUS_STATUS_EXTRA");
+            return;
+        }
+        mDownloadStatus = status;
+        mDownloadTrackNum = intent.getIntExtra(Downloader.TRACK_NUM_STATUS_EXTRA, -1);
+        mDownloadNumTracks = intent.getIntExtra(Downloader.NUM_TRACKS_STATUS_EXTRA, -1);
+        setDownloadable();
+    }
+
     class ReceiveMessages extends BroadcastReceiver {
         @Override
         public void onReceive(@NonNull Context context, @NonNull Intent intent) {
@@ -217,12 +262,15 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 case MusicService.ACTION_PLAY_STATE:
                     onPlayStateIntent(intent);
                     break;
-                case Downloader.ACTION_DOWNLOAD_STATE: {
+                case Downloader.ACTION_DOWNLOAD_MESSAGE: {
                     String msg = intent.getStringExtra("message");
                     if (msg != null)
                         Note.toastLong(context, msg);
                     break;
                 }
+                case Downloader.ACTION_DOWNLOAD_STATUS:
+                    onDownloadStatus(intent);
+                    break;
                 case AudioManager.ACTION_AUDIO_BECOMING_NOISY:
                     // e.g., headphones removed
                     Note.toastShort(context, "Noise!");
@@ -231,38 +279,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 case TelephonyManager.ACTION_PHONE_STATE_CHANGED:
                     onCallState(intent);
                     break;
-                case BluetoothDevice.ACTION_ACL_CONNECTED: {
-                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
-                    if (device == null) {
-                        Log.w(TAG, "No Bluetooth device for " + action);
-                        break;
-                    }
-                    Log.i(TAG, "Connected Bluetooth: " + describeBluetoothDevice(device));
-                    setDriving(device, true);
-                    break;
-                }
-                case BluetoothDevice.ACTION_ACL_DISCONNECTED: {
-                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
-                    if (device == null) {
-                        Log.w(TAG, "No Bluetooth device for " + action);
-                        break;
-                    }
-                    Log.i(TAG, "Disconnected Bluetooth: " + describeBluetoothDevice(device));
-                    setDriving(device, false);
-                    break;
-                }
-                case BluetoothAdapter.ACTION_STATE_CHANGED: {
-                    BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
-                    if (device == null) {
-                        Log.w(TAG, "No Bluetooth device for " + action);
-                        break;
-                    }
-                    int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
-                    Log.i(TAG, "State " + state + " for Bluetooth " + describeBluetoothDevice(device));
-                    break;
-                }
                 case Tracks.ACTION_TRACKS_LIST_CHANGED:
                     Tracks.copyTracks(viewedTracks);
+                    setDownloadable();
                     setListItems();
                     break;
                 default:
@@ -272,36 +291,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
         }
     }
 
-    private static final String MY_CAR_BLUETOOTH = "BMW 74998";
     private boolean mIsDriving = false;
 
-    private void setDriving(@NonNull BluetoothDevice dev, boolean enable) {
-        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Note.w(TAG, "setDriving: No permission");
-            return;
-        }
-        if (!dev.getName().equals(MY_CAR_BLUETOOTH))
-            return;
-        if (enable == mIsDriving)
-            return;
+    private void setDriving(boolean enable) {
         mIsDriving = enable;
-        if (mIsDriving)
-            Note.toastLong(this, "Driving");
-        else
-            Note.toastLong(this, "Not driving");
-        onDrivingChanged();
-    }
-
-    private void onDrivingChanged() {
-        mKeepScreenOnCheckBox.setChecked(mIsDriving);
-    }
-
-    private String describeBluetoothDevice(@NonNull BluetoothDevice dev) {
-        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Note.w(TAG, "describeBluetoothDevice: No permission");
-            return "(no permission)";
-        }
-        return '"' + dev.getName() + "\" " + dev.getAddress();
+        mKeepScreenOnCheckBox.setChecked(enable);
     }
 
     private void onCallState(@NonNull Intent intent) {
@@ -321,6 +315,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
             // send an intent to our MusicService to telling it to pause the audio
             askTo(MusicService.ACTION_PAUSE);
         }
+    }
+
+    private boolean isLandscape() {
+        return Configuration.ORIENTATION_LANDSCAPE == getResources().getConfiguration().orientation;
     }
 
     private void setKeepScreenOn() {
@@ -346,13 +344,13 @@ public class MainActivity extends ListActivity implements OnClickListener,
         super.onResume();
         Log.i(TAG, "onResume");
 
-        setAutoScroll(true);
+        setDriving(isLandscape());
+        setKeepScreenOn();
+        setAutoScrollForce(true);
         Tracks.restore(this, true);
+        setDownloadable();
         setListItems();
         showTrack();
-
-        onDrivingChanged();
-        setKeepScreenOn();
 
         /* As long as we're the foreground activity, the user can lock and
            unlock the screen by simply pressing the power button (no need
@@ -368,17 +366,12 @@ public class MainActivity extends ListActivity implements OnClickListener,
             requestPermissions(mPermissionsToRequest, requestCode);
         }
 
-        /* We pass fromActivity=false here because the user hasn't explicitly
-           asked for the download in this situation */
-        if (Downloader.okayToDownload(this, false))
-            Downloader.downloadNow(this, "resume", false, -1, false, null);
+        Downloader.downloadNow(this, "resume", false, -1, false, null);
     }
 
     private boolean mAskPermissions = true;
     private static final String[] mPermissionsToRequest = new String[] {
         Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.BLUETOOTH,
-        Manifest.permission.BLUETOOTH_CONNECT,
     };
 
     private boolean needAnyPermissions() {
@@ -429,6 +422,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mRewindButton = findViewById(R.id.rewindbutton);
         mSeekBar = findViewById(R.id.seekBar);
         mRemainingText = findViewById(R.id.remainingText);
+        mDownloadableIndicator = findViewById(R.id.downloadable);
+        mAutoscrollIndicator = findViewById(R.id.autoscroll);
         mAfterTrackButton = findViewById(R.id.afterTrack);
         mKeepScreenOnCheckBox = findViewById(R.id.keepScreenOn);
 
@@ -445,18 +440,17 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mKeepScreenOnCheckBox.setOnClickListener(this);
         mKeepScreenOnCheckBox.setOnLongClickListener(this);
 
-        mAutoScroll = true;
+        setAutoScrollForce(true);
+
         mAskPermissions = needAnyPermissions();
 
         mReceiver = new ReceiveMessages();
         registerReceiver(mReceiver, new IntentFilter(MusicService.ACTION_PLAY_STATE));
-        registerReceiver(mReceiver, new IntentFilter(Downloader.ACTION_DOWNLOAD_STATE));
+        registerReceiver(mReceiver, new IntentFilter(Downloader.ACTION_DOWNLOAD_MESSAGE));
+        registerReceiver(mReceiver, new IntentFilter(Downloader.ACTION_DOWNLOAD_STATUS));
         registerReceiver(mReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
         registerReceiver(mReceiver, new IntentFilter(Intent.ACTION_MEDIA_BUTTON));
         registerReceiver(mReceiver, new IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED));
-        registerReceiver(mReceiver, new IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED));
-        registerReceiver(mReceiver, new IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED));
-        registerReceiver(mReceiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
         registerReceiver(mReceiver, new IntentFilter(Tracks.ACTION_TRACKS_LIST_CHANGED));
 
         SharedPreferences prefs = getPreferences(MODE_PRIVATE);
@@ -483,8 +477,13 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
             @Override
             public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
-                // This callback could be used to keep track of whether the playing track is visible
                 //Log.d(TAG, "onScroll fv=" + firstVisibleItem + " v=" + visibleItemCount + " i=" + totalItemCount);
+                // If the playing track is visible, enable autoscroll
+                if (!mAutoScroll) {
+                    int pos = Tracks.currentPosition();
+                    if (pos >= firstVisibleItem && pos < firstVisibleItem + visibleItemCount)
+                        setAutoScroll(true);
+                }
             }
         });
     }
@@ -641,7 +640,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
             return true; // consumed the click
         }
         if (target == mRemainingText) {
-            askScrollToPriority();
+            askPriorities();
             return true; // consumed the click
         }
         if (target == mPlayButton) {
@@ -738,20 +737,14 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 nextQuietView.setText("");
             }
             else {
-                String title = t.title;
+                StringBuilder sb = new StringBuilder();
+                sb.append(priorityGlyph(t.priorityClassChar())).append(' ');
                 if (t.emoji != null && !t.emoji.isEmpty())
-                    title = t.emoji + ' ' + title;
-                if (!t.priority.isEmpty()) {
-                    char c = t.priority.charAt(0);
-                    if (c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
-                        // Convert c to the Unicode character for a dark circle around the uppercase letter
-                        byte[] b = {(byte) 0xF0, (byte) 0x9F, (byte) 0x85, (byte) ((c & 0x1f) - 1 + 0x90)};
-                        String s = new String(b, StandardCharsets.UTF_8);
-                        title = s + " " + title;
-                    }
-                }
-                title += " \uD83D\uDD39 " + t.artist;      // 🔹
-                titleView.setText(title);
+                    sb.append(t.emoji).append(' ');
+                sb.append(t.title);
+                sb.append(" \uD83D\uDD39 ");               // 🔹
+                sb.append(t.artist);
+                titleView.setText(sb.toString());
 
                 if (!t.downloaded) {
                     percentView.setText("\uD83D\uDEA9");   // 🚩
@@ -771,8 +764,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     nextQuietView.setText(nextQuiet(t));
                 }
 
-                int dur = t.durMs / 1000;
-                durationView.setText(String.format(Locale.US, "%d:%02d", dur / 60, dur % 60));
+                durationView.setText(Utilities.mmss(t.durMs));
             }
             if (position != Tracks.currentPosition())
                 rowView.setBackgroundColor(Color.BLACK);
@@ -791,11 +783,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private static String nextQuiet(@NonNull Track t) {
         if (t.quiet != null)
             for (int q : t.quiet) {
-                int n = q - t.curMs;
-                if (n >= 0) {
-                    n /= 1000;
-                    return String.format(Locale.US, "%d:%02d", n / 60, n % 60);
-                }
+                int ms = q - t.curMs;
+                if (ms >= 0)
+                    return Utilities.mmss(ms);
             }
         return "";
     }
@@ -806,7 +796,6 @@ public class MainActivity extends ListActivity implements OnClickListener,
             Note.toastLong(this, "No such track");
             return;
         }
-        int remMs = t.remMs();
 
         StringBuilder sb = new StringBuilder();
         sb.append('"')
@@ -818,16 +807,33 @@ public class MainActivity extends ListActivity implements OnClickListener,
         sb.append("Artist: \"").append(t.artist).append("\"\n\n");
         sb.append(Utilities.mmss(t.curMs))
                 .append(" + ")
-                .append(Utilities.mmss(remMs))
+                .append(Utilities.mmss(t.remMs()))
                 .append(" = ")
                 .append(Utilities.mmss(t.durMs));
 
-        /* Show how long until this track will finish playing if all lower-numbered
-           tracks are played first. */
-        for (int pos = 0; pos < position; ++pos) {
-            Track u = Tracks.track(pos);
-            if (u != null)
-                remMs += u.remMs();
+        int remMs = 0;
+        switch (mAfterTrack) {
+        case FIRST:
+            /* Show how long until this track will finish playing if all lower-numbered
+               tracks are played first. */
+            for (int pos = 0; pos <= position; ++pos) {
+                Track u = Tracks.track(pos);
+                if (u != null)
+                    remMs += u.remMs();
+            }
+            break;
+        case NEXT:
+            /* Show how long until the final track will finish playing */
+            for (int pos = position; pos < Tracks.numTracks(); ++pos) {
+                Track u = Tracks.track(pos);
+                if (u != null)
+                    remMs += u.remMs();
+            }
+            break;
+        case STOP:
+            /* Show how long until the current track will finish playing */
+            remMs = t.remMs();
+            break;
         }
         sb.append("\n\nFinish in ");
         sb.append(Utilities.hhmmss(remMs));
@@ -899,10 +905,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
         Note.toastLong(this, "Deleted " + numDeleted);
         if (numDeleted != 0) {
             Tracks.restore(this, true);
-            showTrack();
             setSeekBar();
             askTo(MusicService.ACTION_UPDATE_METADATA);
         }
+        showTrack();
     }
 
     private void rewindAll() {
@@ -929,16 +935,77 @@ public class MainActivity extends ListActivity implements OnClickListener,
         Downloader.downloadNow(this, "only", true, -1, thenStart, onlyIdent);
     }
 
-    private void askScrollToPriority() {
-        AlertDialog.Builder alert = new AlertDialog.Builder(this);
-        alert.setTitle("Scroll to Priority?");
-        alert.setCancelable(true);
+    @NonNull
+    private static String priorityGlyph(int c) {
+        if (c == -1)
+            return "";
+        if (c >= 'A' && c <= 'Z') {
+            // Convert c to the Unicode character for a dark circle around the uppercase letter
+            byte[] b = {(byte) 0xF0, (byte) 0x9F, (byte) 0x85, (byte) ((c & 0x1f) - 1 + 0x90)};
+            return new String(b, StandardCharsets.UTF_8);
+        }
+        if (c == '=')
+            return "\u29BF";    // ⦿ "CIRCLED BULLET"
+        return String.valueOf(c);
+    }
 
-        alert.setSingleChoiceItems(Tracks.priorityClasses(), 0,
+    private static void addPriorityItem(@NonNull ArrayList<CharSequence> pcs, int pcc, int count,
+                                        int remMs, int downloadable) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(priorityGlyph(pcc));
+        sb.append(' ').append(Utilities.hhmmss(remMs));
+        sb.append(" [").append(count).append(']');
+        if (downloadable != 0)
+            sb.append(" +").append(downloadable);
+        pcs.add(sb.toString());
+    }
+
+    private static CharSequence[] makePriorityItems() {
+        int count = 0;
+        int remMs = 0;
+        int downloadable = 0;
+        int lastPcc = -1;
+        ArrayList<CharSequence> pcs = new ArrayList<>();
+        for (Track track : Tracks.copyTracks()) {
+            int pcc = track.priorityClassChar();
+            if (count != 0 && pcc != lastPcc) {
+                addPriorityItem(pcs, lastPcc, count, remMs, downloadable);
+                count = 0;
+                remMs = 0;
+                downloadable = 0;
+            }
+            count++;
+            remMs += track.remMs();
+            if (!track.downloaded)
+                downloadable++;
+            lastPcc = pcc;
+        }
+        if (count != 0)
+            addPriorityItem(pcs, lastPcc, count, remMs, downloadable);
+        return pcs.toArray(new CharSequence[0]);
+    }
+
+    private static int findByGlyph(@NonNull String item) {
+        // Find the index of the first track that's using this item's priority glyph
+        List<Track> tracks = Tracks.copyTracks();
+        int i = 0;
+        for (Track track : Tracks.copyTracks()) {
+            String pg = priorityGlyph(track.priorityClassChar());
+            if (item.startsWith(pg))
+                return i;
+            i++;
+        }
+        return -1;
+    }
+
+    private void askPriorities() {
+        AlertDialog.Builder alert = new AlertDialog.Builder(this);
+        alert.setTitle("Priorities");
+        alert.setCancelable(true);
+        CharSequence[] items = makePriorityItems();
+        alert.setSingleChoiceItems(items, 0,
                 (dialog, which) -> {
-                    CharSequence[] pcs = Tracks.priorityClasses();
-                    String pc = pcs[which].toString();
-                    int pos = Tracks.findPriorityClass(pc, false);
+                    int pos = findByGlyph(items[which].toString());
                     if (pos != -1) {
                         setAutoScroll(false);
                         getListView().smoothScrollToPositionFromTop(pos, 0);
@@ -1072,8 +1139,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         sb.append("\nClients: ").append(TcpService.numClients());
         sb.append("\nTracks: ").append(Tracks.numTracks());
         sb.append("\nDownloadable: ").append(Tracks.numDownloadable());
-        int remMin = Tracks.remainingSeconds() / 60;
-        sb.append(String.format(Locale.US, "\nHours remaining: %d:%02d", remMin / 60, remMin % 60));
+        sb.append("\nHours remaining: ").append(Utilities.hhmmss(Tracks.remMs()));
 
         sb.append("\nDisk free: ").append(diskFree());
 
@@ -1105,7 +1171,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     void playPriorityA() {
-        int pos = Tracks.findPriorityClass("A", true);
+        int pos = Tracks.findPriorityClass('A', true);
         if (pos == -1) {
             Note.toastLong(this, "No such track");
             return;
@@ -1114,16 +1180,17 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     private static final int
-        MAIN_MENU_DELETE_FINISHED = 0,
-        MAIN_MENU_DOWNLOAD_ALL = 1,
-        MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 2,
-        MAIN_MENU_DOWNLOAD_NONE = 3,
-        MAIN_MENU_REWIND_ALL = 4,
-        MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI = 5,
-        MAIN_MENU_SCROLL_TO_PRIORITY = 6,
-        MAIN_MENU_STATUS = 7,
-        MAIN_MENU_PLAY_PRIORITY_A = 8,
-        MAIN_MENU_SIZE = 9;
+        MAIN_MENU_PLAY_PRIORITY_A = 0,
+        MAIN_MENU_DOWNLOAD_NONE = 1,
+        MAIN_MENU_DOWNLOAD_ALL = 2,
+        MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 3,
+        MAIN_MENU_PRIORITIES = 4,
+        MAIN_MENU_DELETE_FINISHED = 5,
+        MAIN_MENU_REWIND_ALL = 6,
+        MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI = 7,
+        MAIN_MENU_STATUS = 8,
+        MAIN_MENU_LAUNCH_BROWSER = 9,
+        MAIN_MENU_SIZE = 10;
 
     private void showMainMenu() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
@@ -1139,10 +1206,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mi[MAIN_MENU_REWIND_ALL] = Tracks.numRewindable() != 0
             ? "Rewind all" : "(Rewind all)";
         mi[MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI] = autoDownloadOnWifiLabel(!Downloader.mAutoDownloadOnWifi);
-        mi[MAIN_MENU_SCROLL_TO_PRIORITY] = "Scroll to priority";
+        mi[MAIN_MENU_PRIORITIES] = "Priorities";
         mi[MAIN_MENU_STATUS] = "Status";
-        mi[MAIN_MENU_PLAY_PRIORITY_A] = Tracks.findPriorityClass("A", true) != -1
+        mi[MAIN_MENU_PLAY_PRIORITY_A] = Tracks.findPriorityClass('A', true) != -1
             ? "Play priority A" : "(Play priority A)";
+        mi[MAIN_MENU_LAUNCH_BROWSER] = "Launch browser";
 
         builder.setItems(mi, (dialog, which) -> {
             switch (which) {
@@ -1168,8 +1236,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 case MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI:
                     setAutoDownloadOnWifi(!Downloader.mAutoDownloadOnWifi);
                     break;
-                case MAIN_MENU_SCROLL_TO_PRIORITY:
-                    askScrollToPriority();
+                case MAIN_MENU_PRIORITIES:
+                    askPriorities();
                     break;
                 case MAIN_MENU_STATUS:
                     showStatus();
@@ -1178,6 +1246,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     setAutoScroll(true);
                     playPriorityA();
                     break;
+                case MAIN_MENU_LAUNCH_BROWSER:
+                    // Handy if there's a captive portal blocking our access
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.waxrat.com")));
+                    break;
             }
             dialog.dismiss();
         });
@@ -1185,12 +1257,12 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     private static final int
-        TRACK_MENU_INFO = 0,
-        TRACK_MENU_DELETE = 1,
-        TRACK_MENU_MOVE_TO_TOP = 2,
-        TRACK_MENU_REWIND = 3,
-        TRACK_MENU_DOWNLOAD = 4,
-        TRACK_MENU_DOWNLOAD_AND_PLAY = 5,
+        TRACK_MENU_DOWNLOAD = 0,
+        TRACK_MENU_DOWNLOAD_AND_PLAY = 1,
+        TRACK_MENU_INFO = 2,
+        TRACK_MENU_DELETE = 3,
+        TRACK_MENU_MOVE_TO_TOP = 4,
+        TRACK_MENU_REWIND = 5,
         TRACK_MENU_SIZE = 6;
 
     private void showTrackMenu(final int position) {
@@ -1202,7 +1274,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mi[TRACK_MENU_INFO] = "Info";
         mi[TRACK_MENU_DELETE] = ! isPlaying(track) ?
             "Delete" : "(Delete)";
-        mi[TRACK_MENU_MOVE_TO_TOP] = position != 0
+        mi[TRACK_MENU_MOVE_TO_TOP] = position != 0 || ! track.isTopPriority()
             ? "Move to top" : "(Move to top)";
         mi[TRACK_MENU_REWIND] = track.curMs != 0
             ? "Rewind" : "(Rewind)";

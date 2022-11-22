@@ -111,8 +111,8 @@ public class Utilities {
 
     @NonNull
     static String mmss(int ms) {
-        int s = ms / 1000;
-        return String.format(Locale.US, "%d:%02d.%03d", s / 60, s % 60, ms % 1000);
+        int s = (ms + 500) / 1000;
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
     }
 
     @NonNull
@@ -271,13 +271,6 @@ public class Utilities {
         if (folder == null)
             throw new RuntimeException("No external cache dir");
         return folder;
-    }
-
-    static int find(@NonNull ArrayList<CharSequence> haystack, @NonNull String needle) {
-        for (int i = 0; i < haystack.size(); ++i)
-            if (needle.contentEquals(haystack.get(i)))
-                return i;
-        return -1;
     }
 
     private static String toString(@NonNull InputStream is) throws IOException {
