@@ -200,6 +200,12 @@ class Tracks {
         sb.append('\t');
         if (t.emoji != null)
             sb.append(t.emoji);
+        sb.append('\t');
+        if (t.feed_url != null)
+            sb.append(t.feed_url);
+        sb.append('\t');
+        if (t.track_url != null)
+            sb.append(t.track_url);
 
         return sb.toString();
     }
@@ -264,6 +270,8 @@ class Tracks {
             // this.skipForwardMs - default
             // this.skipBackwardMs - default
             track.emoji = tags.emoji;
+            track.feed_url = tags.feed_url;
+            track.track_url = tags.track_url;
             track.quiet = tags.quiet;
             tracks.add(track);
         }
@@ -430,6 +438,8 @@ class Tracks {
             return;
         track.title = tags.title;
         track.emoji = tags.emoji;
+        track.feed_url = tags.feed_url;
+        track.track_url = tags.track_url;
         track.artist = tags.artist;
         track.priority = tags.priority;
         track.size = tags.size;
@@ -592,13 +602,17 @@ class Tracks {
         return Optional.of(true);
     }
 
-    static synchronized void rewind(@NonNull Context context, @NonNull Track track) {
-        if (track.curMs == 0)
+    static synchronized void seek(@NonNull Context context, @NonNull Track track, int whereMs) {
+        if (whereMs < 0)
+            whereMs = 0;
+        else if (whereMs > track.durMs)
+            whereMs = track.durMs;
+        if (track.curMs == whereMs)
             return;
-        Log.i(TAG, "rewind: From " + track.curMs + " for " + track.ident);
-        track.curMs = 0;
+        Log.i(TAG, "seek: From " + track.curMs + " to " + whereMs + " for " + track.ident);
+        track.curMs = whereMs;
         notifyTrackUpdated(track);
-        writeState(context, "rewind");
+        writeState(context, "seek");
     }
 
     static synchronized int remMs() {
@@ -693,17 +707,5 @@ class Tracks {
         tracks.sort(trackComparator);
         selectTrackByIdent(wasCurrent.ident);
         writeState(context, "moveToTop");
-    }
-
-    static synchronized int findPriorityClass(char pc, boolean unfinished) {
-        int pos = 0;
-        for (Track track : tracks) {
-            if (unfinished && track.isFinished())
-                continue;
-            if (pc == track.priorityClassChar())
-                return pos;
-            ++pos;
-        }
-        return -1;
     }
 }

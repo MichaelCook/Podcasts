@@ -225,13 +225,16 @@ public class TcpService extends Service {
         }
 
         @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-        private void sendUpdated(@NonNull String cmd, @NonNull Optional<Boolean> ok) {
+        private void sendUpdated(@NonNull Optional<Boolean> ok,
+                                 @NonNull String cmd,
+                                 @NonNull String ident,
+                                 @NonNull String value) {
             if (!ok.isPresent())
-                sendLine(makeLine("ERR", cmd, "No such track"));
+                sendLine(makeLine("ERR", cmd, "No such track", ident));
             else if (ok.get())
-                sendLine(makeLine("OK", cmd, "Updated"));
+                sendLine(makeLine("OK", cmd, "updated", ident, value));
             else
-                sendLine(makeLine("OK", cmd, "Unchanged"));
+                sendLine(makeLine("OK", cmd, "unchanged", ident, value));
         }
 
         private void setListItems() {
@@ -364,26 +367,30 @@ public class TcpService extends Service {
                 if (cmd.equals("SET-TRACK-PRIORITY") && f.length == 3) {
                     String priority = f[1];
                     String ident = f[2];
-                    sendUpdated(cmd, Tracks.setPriority(mContext, ident, priority));
+                    Optional<Boolean> ok = Tracks.setPriority(mContext, ident, priority);
+                    sendUpdated(ok, cmd, ident, priority);
                     setListItems();
                     continue;
                 }
                 if (cmd.equals("SET-TRACK-EMOJI") && f.length == 3) {
                     String emoji = f[1];
                     String ident = f[2];
-                    sendUpdated(cmd, Tracks.setEmoji(mContext, ident, emoji));
+                    Optional<Boolean> ok = Tracks.setEmoji(mContext, ident, emoji);
+                    sendUpdated(ok, cmd, ident, emoji);
                     continue;
                 }
                 if (cmd.equals("SET-TRACK-TITLE") && f.length == 3) {
                     String title = f[1];
                     String ident = f[2];
-                    sendUpdated(cmd, Tracks.setTitle(mContext, ident, title));
+                    Optional<Boolean> ok = Tracks.setTitle(mContext, ident, title);
+                    sendUpdated(ok, cmd, ident, title);
                     continue;
                 }
                 if (cmd.equals("SET-TRACK-ARTIST") && f.length == 3) {
                     String artist = f[1];
                     String ident = f[2];
-                    sendUpdated(cmd, Tracks.setArtist(mContext, ident, artist));
+                    Optional<Boolean> ok = Tracks.setArtist(mContext, ident, artist);
+                    sendUpdated(ok, cmd, ident, artist);
                     continue;
                 }
                 if (cmd.equals("DELETE-FINISHED-TRACKS") && f.length == 1) {
@@ -455,10 +462,30 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd));
                     continue;
                 }
+                if (cmd.equals("SEEK") && f.length == 3) {
+                    String ident = f[1];
+                    int whereMs = Integer.parseInt(f[2]);
+
+                    Track t = Tracks.findTrackByIdent(ident);
+                    if (t == null) {
+                        sendLine(makeLine("ERR", cmd, "No such track", ident));
+                        continue;
+                    }
+                    if (t == Tracks.currentTrack() && MusicService.playing()) {
+                        Intent in = new Intent(MusicService.ACTION_SEEK);
+                        in.setPackage(Utilities.PACKAGE);
+                        in.putExtra("where", whereMs);
+                        mContext.startService(in);
+                    }
+                    else {
+                        Tracks.seek(mContext, t, whereMs);
+                    }
+                    sendLine(makeLine("OK", cmd));
+                    continue;
+                }
                 if (cmd.equals("SET-VOLUME") && f.length == 2) {
                     String action = f[1];
-                    switch (action)
-                    {
+                    switch (action) {
                         case "UP":
                             adjustVolume(AudioManager.ADJUST_RAISE);
                             break;

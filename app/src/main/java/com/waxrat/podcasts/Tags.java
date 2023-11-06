@@ -22,6 +22,8 @@ class Tags {
     long when;                       // when the track was downloaded (POSIX time, seconds)
     @Nullable Integer[] quiet;       // offsets of periods of quiet (milliseconds)
     @Nullable String emoji;          // "🚀"
+    @Nullable String feed_url;
+    @Nullable String track_url;
 
     @Nullable
     static Tags fromFile(@NonNull Context context, @NonNull String ident) {
@@ -29,7 +31,11 @@ class Tags {
         ArrayList<String> lines = Utilities.readFile(file);
         if (lines == null)
             return null;
-        return new Tags(lines);
+        Tags t = new Tags(lines);
+        if (!t.ident.equals(ident))
+            // The "id" field in the file is supposed to be the same as `ident`
+            Note.w(TAG, "Ident mismatch " + t.ident + " != " + ident);
+        return t;
     }
 
     Tags(@NonNull ArrayList<String> lines) {
@@ -52,7 +58,8 @@ class Tags {
                 case "id":
                     self_ident = value;
                     break;
-                case "prio":
+                case "prio":    // TODO: obsolete
+                case "priority":
                     self_priority = value;
                     break;
                 case "durms":
@@ -76,6 +83,12 @@ class Tags {
                 case "emoji":
                     this.emoji = value;
                     break;
+                case "feed_url":
+                    this.feed_url = value;
+                    break;
+                case "track_url":
+                    this.track_url = value;
+                    break;
                 default:
                     Note.w(TAG, "Unknown tag '" + name + "' = '" + value + '\'');
                     break;
@@ -85,7 +98,7 @@ class Tags {
         if (self_ident == null)
             throw new RuntimeException("No 'id' field");
         if (self_priority == null)
-            throw new RuntimeException("No 'prio' field");
+            throw new RuntimeException("No 'priority' field");
         if (this.durMs == -1)
             throw new RuntimeException("No 'durms' field");
         if (self_title == null)
@@ -116,7 +129,7 @@ class Tags {
         sb.append(ident);
         sb.append('\n');
 
-        sb.append("prio\t");
+        sb.append("priority\t");
         sb.append(priority);
         sb.append('\n');
 
@@ -149,6 +162,18 @@ class Tags {
         if (emoji != null) {
             sb.append("emoji\t");
             sb.append(emoji);
+            sb.append('\n');
+        }
+
+        if (feed_url != null) {
+            sb.append("feed_url\t");
+            sb.append(feed_url);
+            sb.append('\n');
+        }
+
+        if (track_url != null) {
+            sb.append("track_url\t");
+            sb.append(track_url);
             sb.append('\n');
         }
 

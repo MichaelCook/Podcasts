@@ -72,6 +72,7 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.telephony.TelephonyManager;
+import android.text.InputType;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -83,6 +84,7 @@ import android.widget.AbsListView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
@@ -515,13 +517,18 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     private void alert(@NonNull String title, @NonNull String message) {
-        AlertDialog.Builder alert = new AlertDialog.Builder(this);
-        alert.setTitle(title);
-        alert.setMessage(message);
-        alert.setCancelable(true);
-        alert.setNeutralButton("OK", (dialog, id) -> Log.i(TAG, "ok"));
-        AlertDialog alertDialog = alert.create();
-        alertDialog.show();
+        TextView text = new TextView(this);
+        text.setText(message);
+        text.setTextIsSelectable(true);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setView(text);
+        builder.setTitle(title);
+        builder.setCancelable(true);
+        builder.setNeutralButton("OK", (dialog, id) -> Log.i(TAG, "ok"));
+
+        AlertDialog dialog = builder.create();
+        dialog.show();
     }
 
     private void confirm(@NonNull String title, @NonNull String message,
@@ -554,7 +561,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 Note.toastLong(this, "No track");
                 return;
             }
-            playTrack(Tracks.currentPosition(), true);
+            playTrack(t, true);
             return;
         }
         if (target == mForwardButton) {
@@ -645,7 +652,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         }
         if (target == mPlayButton) {
             setAutoScroll(true);
-            playPriorityA();
+            playFirstTrack();
             return true; // consumed the click
         }
         if (target == mKeepScreenOnCheckBox) {
@@ -852,21 +859,18 @@ public class MainActivity extends ListActivity implements OnClickListener,
         }
         ListView lv = getListView();
         lv.setOnItemLongClickListener((parent, view, position, id) -> {
-            playTrack(position, false);
+            Track t = Tracks.track(position);
+            if (t != null)
+                playTrack(t, false);
             return true; // click consumed
         });
         setSeekBar();
     }
 
-    private void playTrack(int position, boolean go) {
+    private void playTrack(@NonNull Track t, boolean go) {
         if (MusicService.playing())
             go = true;
 
-        Track t = Tracks.track(position);
-        if (t == null) {
-            Note.toastLong(this, "playTrack: no track " + position);
-            return;
-        }
         if (!t.downloaded) {
             Note.toastLong(this, "Track is not yet downloaded");
             startDownload(t.ident, true);
@@ -949,39 +953,46 @@ public class MainActivity extends ListActivity implements OnClickListener,
         return String.valueOf(c);
     }
 
-    private static void addPriorityItem(@NonNull ArrayList<CharSequence> pcs, int pcc, int count,
-                                        int remMs, int downloadable) {
+    private static void addPriorityItem(@NonNull ArrayList<CharSequence> pcs, int pcc, int numTracks,
+                                        int remMs, int numDownloadable, int numFinished) {
         StringBuilder sb = new StringBuilder();
         sb.append(priorityGlyph(pcc));
         sb.append(' ').append(Utilities.hhmmss(remMs));
-        sb.append(" [").append(count).append(']');
-        if (downloadable != 0)
-            sb.append(" +").append(downloadable);
+        sb.append(" [").append(numTracks - numDownloadable - numFinished);
+        if (numDownloadable != 0)
+            sb.append('+').append(numDownloadable);
+        if (numFinished != 0)
+            sb.append('-').append(numFinished);
+        sb.append(']');
         pcs.add(sb.toString());
     }
 
     private static CharSequence[] makePriorityItems() {
-        int count = 0;
+        int numTracks = 0;
         int remMs = 0;
-        int downloadable = 0;
+        int numDownloadable = 0;
+        int numFinished = 0;
         int lastPcc = -1;
         ArrayList<CharSequence> pcs = new ArrayList<>();
         for (Track track : Tracks.copyTracks()) {
             int pcc = track.priorityClassChar();
-            if (count != 0 && pcc != lastPcc) {
-                addPriorityItem(pcs, lastPcc, count, remMs, downloadable);
-                count = 0;
+            if (numTracks != 0 && pcc != lastPcc) {
+                addPriorityItem(pcs, lastPcc, numTracks, remMs, numDownloadable, numFinished);
+                numTracks = 0;
                 remMs = 0;
-                downloadable = 0;
+                numDownloadable = 0;
+                numFinished = 0;
             }
-            count++;
+            numTracks++;
             remMs += track.remMs();
             if (!track.downloaded)
-                downloadable++;
+                numDownloadable++;
+            if (track.isFinished())
+                numFinished++;
             lastPcc = pcc;
         }
-        if (count != 0)
-            addPriorityItem(pcs, lastPcc, count, remMs, downloadable);
+        if (numTracks != 0)
+            addPriorityItem(pcs, lastPcc, numTracks, remMs, numDownloadable, numFinished);
         return pcs.toArray(new CharSequence[0]);
     }
 
@@ -1082,7 +1093,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
                         askTo(MusicService.ACTION_SKIP_TO_TRACK_START);
                     }
                     else {
-                        Tracks.rewind(this, track);
+                        Tracks.seek(this, track, 0);
                     }
                 });
     }
@@ -1170,17 +1181,14 @@ public class MainActivity extends ListActivity implements OnClickListener,
         Note.toastLong(this, autoDownloadOnWifiLabel(Downloader.mAutoDownloadOnWifi));
     }
 
-    void playPriorityA() {
-        int pos = Tracks.findPriorityClass('A', true);
-        if (pos == -1) {
-            Note.toastLong(this, "No such track");
-            return;
-        }
-        playTrack(pos, true);
+    void playFirstTrack() {
+        Track t = Tracks.pickFirst();
+        if (t != null)
+            playTrack(t, true);
     }
 
     private static final int
-        MAIN_MENU_PLAY_PRIORITY_A = 0,
+        MAIN_MENU_PLAY_FIRST_TRACK = 0,
         MAIN_MENU_DOWNLOAD_NONE = 1,
         MAIN_MENU_DOWNLOAD_ALL = 2,
         MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 3,
@@ -1208,8 +1216,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mi[MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI] = autoDownloadOnWifiLabel(!Downloader.mAutoDownloadOnWifi);
         mi[MAIN_MENU_PRIORITIES] = "Priorities";
         mi[MAIN_MENU_STATUS] = "Status";
-        mi[MAIN_MENU_PLAY_PRIORITY_A] = Tracks.findPriorityClass('A', true) != -1
-            ? "Play priority A" : "(Play priority A)";
+        mi[MAIN_MENU_PLAY_FIRST_TRACK] = "Play first track";
         mi[MAIN_MENU_LAUNCH_BROWSER] = "Launch browser";
 
         builder.setItems(mi, (dialog, which) -> {
@@ -1242,9 +1249,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 case MAIN_MENU_STATUS:
                     showStatus();
                     break;
-                case MAIN_MENU_PLAY_PRIORITY_A:
+                case MAIN_MENU_PLAY_FIRST_TRACK:
                     setAutoScroll(true);
-                    playPriorityA();
+                    playFirstTrack();
                     break;
                 case MAIN_MENU_LAUNCH_BROWSER:
                     // Handy if there's a captive portal blocking our access
@@ -1263,7 +1270,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
         TRACK_MENU_DELETE = 3,
         TRACK_MENU_MOVE_TO_TOP = 4,
         TRACK_MENU_REWIND = 5,
-        TRACK_MENU_SIZE = 6;
+        TRACK_MENU_EDIT_PRIORITY = 6,
+        TRACK_MENU_SIZE = 7;
 
     private void showTrackMenu(final int position) {
         Track track = Tracks.track(position);
@@ -1282,6 +1290,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
             ? "Download" : "(Download)";
         mi[TRACK_MENU_DOWNLOAD_AND_PLAY] = ! track.downloaded
             ? "Download and play" : "(Download and play)";
+        mi[TRACK_MENU_EDIT_PRIORITY] = "Edit priority";
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Track Menu");
@@ -1312,9 +1321,52 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     else
                         startDownload(track.ident, true);
                     break;
+                case TRACK_MENU_EDIT_PRIORITY:
+                    editPriority(track);
+                    break;
             }
             dialog.dismiss();
         });
         builder.show();
+    }
+
+    private void editPriority(@NonNull Track t) {
+        AlertDialog.Builder alert = new AlertDialog.Builder(this);
+        alert.setTitle("Edit Priority");
+
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        input.setText(t.priority);
+        input.setSelectAllOnFocus(true);
+        alert.setView(input);
+
+        alert.setTitle("Edit Priority");
+        alert.setCancelable(true);
+
+        alert.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                String newPriority = input.getText().toString();
+                if (newPriority.length() == 1) {
+                    newPriority += t.priority.substring(1);
+                }
+                if (newPriority.equals(t.priority)) {
+                    Note.toastLong(MainActivity.this, "Priority unchanged: " + newPriority);
+                    return;
+                }
+                Note.toastLong(MainActivity.this, "New priority: " + newPriority);
+                Tracks.setPriority(MainActivity.this, t.ident, newPriority);
+                setListItems();
+            }
+        });
+        alert.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.cancel();
+            }
+        });
+
+        AlertDialog alertDialog = alert.create();
+        alertDialog.show();
     }
 }

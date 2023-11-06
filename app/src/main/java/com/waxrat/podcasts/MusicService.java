@@ -143,7 +143,7 @@ implements OnCompletionListener,
     private void updateActivity() {
         if (mPlayer == null)
             return;
-        Track t = playingTrack;
+        Track t = mPlayingTrack;
         if (t == null)
             return;
         Intent i = new Intent(ACTION_PLAY_STATE);
@@ -192,7 +192,7 @@ implements OnCompletionListener,
     }
 
     void updateMediaSessionMetaData() {
-        Track t = playingTrack;
+        Track t = mPlayingTrack;
         if (t == null) {
             mSession.setMetadata(null);
             return;
@@ -222,7 +222,7 @@ implements OnCompletionListener,
     }
 
     // The track currently playing
-    private Track playingTrack = null;
+    private Track mPlayingTrack = null;
 
     // The track currently playing
     private Track preparingTrack = null;
@@ -406,10 +406,10 @@ implements OnCompletionListener,
                 updateMediaSessionMetaData();
                 break;
             case ACTION_GET_STATUS:
-                if (playing() && playingTrack != null)
+                if (playing() && mPlayingTrack != null)
                 {
-                    TcpService.broadcast(TcpService.NFY_PLAYING, playingTrack.ident,
-                            String.valueOf(playingTrack.curMs));
+                    TcpService.broadcast(TcpService.NFY_PLAYING, mPlayingTrack.ident,
+                            String.valueOf(mPlayingTrack.curMs));
                 }
                 else
                 {
@@ -499,8 +499,8 @@ implements OnCompletionListener,
         if (newMs > barrierMs)
             newMs = barrierMs;
 
-        if (playingTrack != null && playingTrack.quiet != null) {
-            for (int q : playingTrack.quiet) {
+        if (mPlayingTrack != null && mPlayingTrack.quiet != null) {
+            for (int q : mPlayingTrack.quiet) {
                 if (curMs < q && newMs >= q) {
                     newMs = q;
                     if (mQuietToast != null)
@@ -678,7 +678,14 @@ implements OnCompletionListener,
             case STOP:
                 // After stopping, return to FIRST mode
                 setAfterTrack(MainActivity.AfterTrack.FIRST);
-                break;
+                stop();
+                track = Tracks.pickNext();
+                if (track != null) {
+                    Tracks.selectTrackByIdent(track.ident);
+                    Tracks.restore(this, true);
+                    TcpService.broadcast(TcpService.NFY_TRACK_SELECTED, track.ident);
+                }
+                return;
             case NEXT:
                 track = Tracks.pickNext();
                 break;
@@ -702,13 +709,13 @@ implements OnCompletionListener,
         // The media player is done preparing, we can start playing
         if (preparingTrack == null)
             return;
-        playingTrack = preparingTrack;
+        mPlayingTrack = preparingTrack;
         preparingTrack = null;
-        Tracks.selectTrackByIdent(playingTrack.ident);
+        Tracks.selectTrackByIdent(mPlayingTrack.ident);
 
         setState(State.Playing);
-        assert playingTrack != null;
-        updateNotification('"' + playingTrack.title + '"');
+        assert mPlayingTrack != null;
+        updateNotification('"' + mPlayingTrack.title + '"');
         if (seekMs != -1) {
             int barrier = player.getDuration() - BARRIER_MS;
             if (barrier < 0)

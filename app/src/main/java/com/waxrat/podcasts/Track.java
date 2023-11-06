@@ -41,7 +41,7 @@ import java.io.File;
 final class Track {
     private final static String TAG = "Podcasts.Track";
 
-    static final int TOP_PRIORITY_CLASS = '=';
+    static final int TOP_PRIORITY_CLASS = 'A';
 
     @NonNull final String ident;
     @NonNull String title;
@@ -54,6 +54,8 @@ final class Track {
     boolean downloaded;    // True if we have the .mp3 audio file for this track
     final int skipForwardMs, skipBackwardMs;
     @Nullable String emoji;
+    @Nullable String feed_url;
+    @Nullable String track_url;
     @Nullable Integer[] quiet;
 
     Track(@NonNull String ident) {
@@ -69,6 +71,8 @@ final class Track {
         this.skipForwardMs = 30000;
         this.skipBackwardMs = 10000;
         this.emoji = null;
+        this.feed_url = null;
+        this.track_url = null;
         this.quiet = null;
     }
 
