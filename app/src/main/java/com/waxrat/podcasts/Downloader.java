@@ -545,7 +545,7 @@ public final class Downloader extends Worker {
             }
             /*
               The podcasts.php script delivers to us the contents of all .tag
-              files as constructed by pod-download.  Consecutive tag files are
+              files as constructed by pod-feed.  Consecutive tag files are
               separated by a single blank line.  The end of the output is the
               line "OK" to help us ensure we got the whole output.
              */
@@ -605,16 +605,16 @@ public final class Downloader extends Worker {
             announce(context, "Connect failed, try again");
             return null;
         }
+        catch (java.net.SocketException ex) {
+            // Likely transient networking problem
+            Log.i(TAG, "SocketException");
+            announce(context, "Socket failed, try again");
+            return null;
+        }
         catch (java.net.SocketTimeoutException ex) {
             // Likely transient networking problem
             Log.i(TAG, "SocketTimeoutException");
             announce(context, "Socket timeout, try again");
-            return null;
-        }
-        catch (java.net.NoRouteToHostException ex) {
-            // Likely transient networking problem
-            Log.i(TAG, "NoRouteToHostException");
-            announce(context, "No route to host, try again");
             return null;
         }
         catch (Exception ex) {
