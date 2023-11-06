@@ -15,7 +15,7 @@ cvt () {
 # ImageMagick tools are installed but "convert" is too common a name.
 uses convert mogrify || exit
 
-if [ $# -eq 0 ]; then
+if (( $# == 0 )); then
     set -- playing trouble launcher
 fi
 
