@@ -963,9 +963,20 @@ public class MainActivity extends ListActivity implements OnClickListener,
             };
             return new String(b, StandardCharsets.UTF_8);
         }
-        if (c == '=')
-            return "\u29BF";    // ⦿ "CIRCLED BULLET"
-        return String.valueOf(c);
+        if (c >= 'a' && c <= 'z') {
+            // ⓐ … ⓩ : CIRCLED LATIN SMALL LETTER A-Z
+            byte[] b = {        // UTF-8 encoding
+                (byte) 0xE2,
+                (byte) 0x93,
+                (byte) (0x90 + (c & 0x1f) - 1)
+            };
+            return new String(b, StandardCharsets.UTF_8);
+        }
+        if (c >= '!' && c <= '~') {
+            return "(" + String.valueOf((char) c) + ")";
+        }
+        // c is int, so this will be like "<1234>"
+        return "<" + String.valueOf(c) + ">";
     }
 
     private static void addPriorityItem(@NonNull ArrayList<CharSequence> pcs, int pcc, int numTracks,
