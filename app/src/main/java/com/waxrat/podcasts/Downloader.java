@@ -90,16 +90,20 @@ public final class Downloader extends Worker {
     static final String NUM_TRACKS_STATUS_EXTRA = "num-tracks";
 
     private static void broadcastStatus(@NonNull Context context,
-            @NonNull String status, int trackNum, int numTracks) {
+            @NonNull String status, int trackNum, int numTracks,
+            @Nullable String ident) {
         Intent i = new Intent(ACTION_DOWNLOAD_STATUS);
         i.putExtra(STATUS_STATUS_EXTRA, status);
+        // Track #trackNum of numTracks (e.g., #1 of 4)
         i.putExtra(TRACK_NUM_STATUS_EXTRA, trackNum);
         i.putExtra(NUM_TRACKS_STATUS_EXTRA, numTracks);
+        if (ident != null)
+            i.putExtra(IDENT_EXTRA, ident);
         context.sendBroadcast(i);
     }
 
     private static void broadcastStatus(@NonNull Context context, @NonNull String status) {
-        broadcastStatus(context, status, -1, -1);
+        broadcastStatus(context, status, -1, -1, null);
     }
 
     public Downloader(@NonNull Context context, @NonNull WorkerParameters params) {
@@ -662,7 +666,7 @@ public final class Downloader extends Worker {
             return false;
         }
 
-        broadcastStatus(context, DOWNLOADING_STATUS, downloadIndex, numDownloads);
+        broadcastStatus(context, DOWNLOADING_STATUS, downloadIndex, numDownloads, ident);
 
         NotificationCompat.Builder nb = notification(context, NOTIFY_DOWNLOADING, "Get...",
                 (downloadIndex) + " of " + numDownloads + ": " + track.artist,

@@ -141,9 +141,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private @NonNull String mDownloadStatus = Downloader.IDLE_STATUS;
     private int mDownloadTrackNum = -1;
     private int mDownloadNumTracks = -1;
+    private String mDownloadIdent = null;
 
     private void setDownloadable() {
-        Log.d(TAG, "setDownloadable " + mDownloadStatus + " " + mDownloadTrackNum + " " + mDownloadNumTracks);
+        Log.d(TAG, "setDownloadable " + mDownloadStatus + " " + mDownloadTrackNum +
+              " " + mDownloadNumTracks + " " + mDownloadIdent);
         String msg = "";
         switch (mDownloadStatus) {
         case Downloader.POLLING_STATUS:
@@ -250,6 +252,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mDownloadStatus = status;
         mDownloadTrackNum = intent.getIntExtra(Downloader.TRACK_NUM_STATUS_EXTRA, -1);
         mDownloadNumTracks = intent.getIntExtra(Downloader.NUM_TRACKS_STATUS_EXTRA, -1);
+        mDownloadIdent = intent.getStringExtra(Downloader.IDENT_EXTRA);
         setDownloadable();
     }
 
@@ -749,12 +752,19 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 if (t.emoji != null && !t.emoji.isEmpty())
                     sb.append(t.emoji).append(' ');
                 sb.append(t.title);
-                sb.append(" \uD83D\uDD39 ");               // 🔹
+                // "🔹" U+1F539: SMALL BLUE DIAMOND
+                sb.append(" \uD83D\uDD39 ");
                 sb.append(t.artist);
                 titleView.setText(sb.toString());
 
-                if (!t.downloaded) {
-                    percentView.setText("\uD83D\uDEA9");   // 🚩
+                if (mDownloadIdent != null && mDownloadIdent.equals(t.ident)) {
+                    // "🌀" U+1F300: CYCLONE
+                    percentView.setText("\uD83C\uDF00");
+                    nextQuietView.setText("");
+                }
+                else if (!t.downloaded) {
+                    // "🚩" U+1F6A9: TRIANGULAR FLAG ON POST
+                    percentView.setText("\uD83D\uDEA9");
                     nextQuietView.setText("");
                 }
                 else if (t.isFinished()) {
@@ -944,8 +954,13 @@ public class MainActivity extends ListActivity implements OnClickListener,
         if (c == -1)
             return "";
         if (c >= 'A' && c <= 'Z') {
-            // Convert c to the Unicode character for a dark circle around the uppercase letter
-            byte[] b = {(byte) 0xF0, (byte) 0x9F, (byte) 0x85, (byte) ((c & 0x1f) - 1 + 0x90)};
+            // 🅐 … 🅩 : NEGATIVE CIRCLED LATIN CAPITAL LETTER A-Z
+            byte[] b = {        // UTF-8 encoding
+                (byte) 0xF0,
+                (byte) 0x9F,
+                (byte) 0x85,
+                (byte) (0x90 + (c & 0x1f) - 1)
+            };
             return new String(b, StandardCharsets.UTF_8);
         }
         if (c == '=')
