@@ -19,7 +19,7 @@ class Tags {
     @NonNull String title;           // "Museum to bring hip-hop history to the Bronx"
     @NonNull String artist;          // "Here+Now"
     long size;                       // audio file size (bytes)
-    long when;                       // when the track was downloaded (POSIX time, seconds)
+    long when;                       // when the track was pulled from the feed (POSIX time, seconds)
     @Nullable Integer[] quiet;       // offsets of periods of quiet (milliseconds)
     @Nullable String emoji;          // "🚀"
     @Nullable String feed_url;
