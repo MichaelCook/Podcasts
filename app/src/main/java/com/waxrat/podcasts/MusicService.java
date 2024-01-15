@@ -135,6 +135,7 @@ implements OnCompletionListener,
     private static State mState = State.Stopped;
     private MediaSession mSession;
     private long mLastTcpNotifyMs;
+    private int mLastVolume = Integer.MIN_VALUE;
 
     static boolean playing() {
         return mState == State.Preparing || mState == State.Playing;
@@ -173,6 +174,16 @@ implements OnCompletionListener,
         }
         sendBroadcast(i);
         updateMediaSessionPlaybackState();
+
+        int stream = AudioManager.STREAM_MUSIC;
+        int volume = mAudioManager.getStreamVolume(stream);
+        if (volume != mLastVolume) {
+            mLastVolume = volume;
+            TcpService.broadcast(TcpService.NFY_VOLUME_UPDATED,
+                    String.valueOf(volume),
+                    String.valueOf(mAudioManager.getStreamMinVolume(stream)),
+                    String.valueOf(mAudioManager.getStreamMaxVolume(stream)));
+        }
     }
 
     private void updateMediaSessionPlaybackState() {
@@ -615,7 +626,12 @@ implements OnCompletionListener,
         try {
             createMediaPlayerIfNeeded();
             assert mPlayer != null;
-            //mPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mPlayer.setAudioAttributes(
+                new AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .build()
+            );
             mPlayer.setDataSource(audioFile.toString());
             setState(State.Preparing);
             setUpAsForeground('"' + t.title + "\" (play)");

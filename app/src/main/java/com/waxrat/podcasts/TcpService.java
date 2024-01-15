@@ -41,6 +41,7 @@ public class TcpService extends Service {
     static final String NFY_TRACK_UPDATED = "NFY\tTRACK-UPDATED";     // updated a track's metadata
     static final String NFY_TRACK_FINISHED = "NFY\tTRACK-FINISHED";
     static final String NFY_CLIENT_CONNECT = "NFY\tCLIENT-CONNECT";
+    static final String NFY_VOLUME_UPDATED = "NFY\tVOLUME-UPDATED";
 
     @Override
     public void onCreate() {
