@@ -1,34 +1,3 @@
-/*
- This software is distributed under the "Simplified BSD license":
-
- Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
-
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
-
-    1. Redistributions of source code must retain the above copyright notice,
-       this list of conditions and the following disclaimer.
-
-    2. Redistributions in binary form must reproduce the above copyright
-       notice, this list of conditions and the following disclaimer in the
-       documentation and/or other materials provided with the distribution.
-
- THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
- EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
- The views and conclusions contained in the software and documentation are
- those of the authors and should not be interpreted as representing official
- policies, either expressed or implied, of Michael Cook.
-*/
-
 package com.waxrat.podcasts;
 
 import java.io.BufferedInputStream;
@@ -43,7 +12,10 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -76,7 +48,7 @@ public final class Downloader extends Worker {
     static final String COMMAND_EXTRA = "command";
     static final String COMMAND_DOWNLOAD = "download";
     static final String COMMAND_DELETE_TRACK = "delete-track";
-    static final String FORCE_EXTRA = "force"; // download even if not on Wi-Fi
+    static final String EVEN_IF_METERED = "even-if-metered";
     static final String MAX_TRACKS_EXTRA = "max-tracks";
     static final String THEN_START_EXTRA = "then-start";
     static final String IDENT_EXTRA = "ident";
@@ -115,27 +87,41 @@ public final class Downloader extends Worker {
     /** Keep track of whether we're running. Android wouldn't deliver a second
         intent while the first was still being handled, so this counter
         should only ever be 0 or 1. */
-    private static int running = 0;
+    private static final AtomicInteger running = new AtomicInteger();
 
     public static boolean isRunning() {
-        return running != 0;
+        return running.get() != 0;
     }
 
     private static NotificationManager mNotificationManager;
 
-    static boolean mAutoDownloadOnWifi = true;
+    enum AutoDownload {
+        ALWAYS,
+        NEVER,
+        UNMETERED;
+
+        AutoDownload next() {
+            AutoDownload[] values = AutoDownload.values();
+            int nextOrdinal = (this.ordinal() + 1) % values.length;
+            return values[nextOrdinal];
+        }
+    }
+    /** Read on the Worker thread, written from the UI thread when the user
+        changes the setting, so a change is guaranteed to be seen promptly
+        (e.g. to stop the download loop after the current track). */
+    static volatile AutoDownload mAutoDownload = AutoDownload.ALWAYS;
 
     static void downloadNow(@NonNull Context context,
                             @NonNull String label,
-                            boolean force, // download even if not on Wi-Fi
+                            boolean evenIfMetered,
                             int maxTracks,
                             boolean thenStart,
                             @Nullable String onlyIdent) {
-        Log.i(TAG, "downloadNow...");
+        Log.i(TAG, "downloadNow: " + label);
         Data.Builder db = new Data.Builder();
         db.putString(COMMAND_EXTRA, COMMAND_DOWNLOAD);
-        if (force)
-            db.putBoolean(FORCE_EXTRA, true);
+        if (evenIfMetered)
+            db.putBoolean(EVEN_IF_METERED, true);
         if (maxTracks != -1)
             db.putInt(MAX_TRACKS_EXTRA, maxTracks);
         if (thenStart)
@@ -150,11 +136,23 @@ public final class Downloader extends Worker {
         WorkManager
                 .getInstance(context.getApplicationContext())
                 .enqueue(request);
-        Log.i(TAG, "downloadNow...done");
+        Log.i(TAG, "downloadNow...done: " + label);
+    }
+
+    static void downloadOnResume(@NonNull Context context) {
+        if (isMetered(context)) {
+            // On a metered connection, check for new tracks no more than every few
+            // minutes no matter how often we resume
+            long elapsed_ms = System.currentTimeMillis() - mLastTagCheck_ms;
+            if (elapsed_ms < 5 * 60 * 1000) {
+                Log.i(TAG, "downloadOnResume: not yet " + elapsed_ms);
+                return;
+            }
+        }
+        downloadNow(context, "resume", false, -1, false, null);
     }
 
     static void deleteTrack(@NonNull Context context,
-                            @NonNull String label,
                             @NonNull String ident) {
         Log.i(TAG, "deleteTrack...");
         Data data = new Data.Builder()
@@ -164,7 +162,7 @@ public final class Downloader extends Worker {
         WorkRequest request =
                 new OneTimeWorkRequest.Builder(Downloader.class)
                         .setInputData(data)
-                        .addTag(label)
+                        .addTag("ask")
                         .build();
         WorkManager
                 .getInstance(context.getApplicationContext())
@@ -174,8 +172,8 @@ public final class Downloader extends Worker {
 
     static final String UNIQUE_WORK_NAME = "DOWNLOAD";
 
-    static void schedule(@NonNull Context context, @NonNull String label) {
-        Log.i(TAG, "schedule: " + label);
+    static void schedule(@NonNull Context context) {
+        Log.i(TAG, "schedule...");
         WorkManager wm = WorkManager.getInstance(context.getApplicationContext());
         wm.cancelUniqueWork(UNIQUE_WORK_NAME);
         Data data = new Data.Builder()
@@ -185,15 +183,15 @@ public final class Downloader extends Worker {
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build();
         PeriodicWorkRequest request =
-                new PeriodicWorkRequest.Builder(Downloader.class, 15, TimeUnit.MINUTES)
+                new PeriodicWorkRequest.Builder(Downloader.class, 60, TimeUnit.MINUTES)
                         .setConstraints(constraints)
                         .setInputData(data)
-                        .addTag(label)
+                        .addTag("scheduled")
                         .build();
         wm.enqueueUniquePeriodicWork(UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.REPLACE,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request);
-        Log.i(TAG, "schedule done: " + label);
+        Log.i(TAG, "schedule...done");
     }
 
     private static final String DOWNLOADING_CHANNEL_ID = "downloading-channel";
@@ -213,7 +211,13 @@ public final class Downloader extends Worker {
     }
 
     @NonNull
-    private NotificationCompat.Builder notification(@NonNull Context context, int id, @NonNull String title, @NonNull String text, int smallIcon) {
+    private NotificationCompat.Builder notification(
+        @NonNull Context context,
+        int id,
+        @NonNull String title,
+        @NonNull String text,
+        int smallIcon
+    ) {
         NotificationCompat.Builder nb = new NotificationCompat.Builder(context, DOWNLOADING_CHANNEL_ID);
         if (id == NOTIFY_DOWNLOADING)
             nb.setOngoing(true); // not cancelable
@@ -245,17 +249,25 @@ public final class Downloader extends Worker {
 
     private static class TagsComparator implements Comparator<Tags> {
         public int compare(@NonNull Tags a, @NonNull Tags b) {
-            String ap = a.priority;
-            String bp = b.priority;
-            int d = ap.compareTo(bp);
-            if (d != 0)
-                return d;
-            return a.ident.compareTo(b.ident);
+            return Utilities.comparePriorityThenIdent(a.priority, a.ident, b.priority, b.ident);
         }
     }
     private static final TagsComparator TAGS_COMPARATOR = new TagsComparator();
 
+    /* The system time when we last successfully checked for new tags, or 0 if never */
+    private static long mLastTagCheck_ms = 0;
+
     private void downloadTags(@NonNull Context context) {
+        // Sometimes we get multiple download requests in rapid succession (e.g., when the app
+        // launches).  Debounce these
+        long now_ms = System.currentTimeMillis();
+        long elapsed_ms = now_ms - mLastTagCheck_ms;
+        if (elapsed_ms < 5 * 1000) {
+            Log.i(TAG, "downloadTags: not yet " + elapsed_ms);
+            return; // don't check for new tracks yet
+        }
+        mLastTagCheck_ms = now_ms;
+
         Tags[] downloads;
         try {
             broadcastStatus(context, POLLING_STATUS);
@@ -282,17 +294,41 @@ public final class Downloader extends Worker {
 
         Arrays.sort(downloads, TAGS_COMPARATOR);
 
-        for (Tags download : downloads)
+        Set<String> seenIdents = new HashSet<>();
+        for (Tags download : downloads) {
+            seenIdents.add(download.ident);
+            if (Tracks.isDeleted(context, download.ident)) {
+                // The user deleted this track; don't resurrect its .tag file.
+                // The server still offers it, so retry the removal.
+                Log.i(TAG, "downloadTags: skipping deleted track " + download.ident);
+                removeFromServer(context, download.ident);
+                continue;
+            }
             download.writeFile(context, false);
+        }
+        if (lastPollWasFull) {
+            // A full listing that omits a tombstoned track confirms the
+            // server-side removal; anything still listed keeps its tombstone
+            // (and got another removal attempt above).
+            for (String ident : Tracks.copyDeletedIdents(context)) {
+                if (!seenIdents.contains(ident)) {
+                    Log.i(TAG, "downloadTags: server no longer offers " + ident);
+                    Tracks.clearDeleted(context, ident);
+                }
+            }
+        }
         Tracks.restore(context, true);
     }
 
     private void downloadAudios(@NonNull Context context,
-                                boolean force,
+                                @NonNull String label,
+                                boolean evenIfMetered,
                                 int maxToDownload,
                                 boolean thenStart,
                                 @Nullable String onlyIdent) {
-        if (!force && downloadDiscouraged(context)) {
+        // A specific track was explicitly requested by the user, so download
+        // it regardless of the auto-download setting.
+        if (onlyIdent == null && downloadDiscouraged(context, evenIfMetered)) {
             return;
         }
         try {
@@ -310,7 +346,8 @@ public final class Downloader extends Worker {
                     Log.i(TAG, "Track is already downloaded: " + track);
                 }
                 else if (!downloadAudio(context, track, thenStart, numDownloaded + 1, numToDownload)) {
-                    trouble = true;
+                    if (!track.deleted)
+                        trouble = true;
                 }
                 else {
                     ++numDownloaded;
@@ -327,12 +364,16 @@ public final class Downloader extends Worker {
                             Log.i(TAG, "Reached download limit");
                             break;
                         }
-                        if (!force && downloadDiscouraged(context)) {
-                            trouble = true; // Lost Wi-Fi while we were downloading
+                        if (downloadDiscouraged(context, evenIfMetered)) {
+                            if (mAutoDownload != AutoDownload.NEVER)
+                                trouble = true; // Lost Wi-Fi while we were downloading
+                            // else: user turned off auto download; stop quietly
+                            // after finishing the track that was in progress
                             break;
                         }
                         if (!downloadAudio(context, track, thenStart, numDownloaded + 1, numToDownload)) {
-                            trouble = true;
+                            if (!track.deleted)
+                                trouble = true;
                             break;
                         }
                         thenStart = false;
@@ -340,6 +381,8 @@ public final class Downloader extends Worker {
                     }
                 }
             }
+            if (numToDownload != 0)
+                Log.i(TAG, "downloadAudios " + label + ' ' + numDownloaded + '/' + numToDownload);
 
             if (trouble) {
                 StringBuilder msg = new StringBuilder();
@@ -362,21 +405,21 @@ public final class Downloader extends Worker {
         }
     }
 
-    private void checkDownloads(@NonNull Context context, boolean force, int maxToDownload,
-                                boolean thenStart, @Nullable String onlyIdent) {
+    private void checkDownloads(@NonNull Context context, @NonNull String label, boolean evenIfMetered,
+                                int maxToDownload, boolean thenStart,
+                                @Nullable String onlyIdent) {
         Log.i(TAG, "checkDownload: maxToDownload=" + maxToDownload + ", thenStart=" + thenStart);
 
         downloadTags(context);
-        downloadAudios(context, force, maxToDownload, thenStart, onlyIdent);
+        downloadAudios(context, label, evenIfMetered, maxToDownload, thenStart, onlyIdent);
     }
 
     private void doCommand() {
         Log.i(TAG, "doCommand...");
         String command = getInputData().getString(COMMAND_EXTRA);
         if (command == null) {
-            // TODO: Why doesn't setInputData work for PeriodicWorkRequest
-            Log.i(TAG, "doCommand: No command, assuming PeriodicWorkRequest");
-            command = COMMAND_DOWNLOAD;
+            Note.w(TAG, "doCommand: No command");
+            return;
         }
         switch (command) {
             case COMMAND_DOWNLOAD:
@@ -406,23 +449,24 @@ public final class Downloader extends Worker {
     private void commandDownload(@NonNull Context context) {
         Data data = getInputData();
 
+        String label = getTags().toString();
+
         // max-tracks: The maximum number of tracks to download. -1 means no maximum.
         // Otherwise, download no more than this number
         int maxTracks = data.getInt(Downloader.MAX_TRACKS_EXTRA, -1);
 
-        // force: Download tracks even if not on Wi-Fi
-        boolean force = data.getBoolean(Downloader.FORCE_EXTRA, false);
+        boolean evenIfMetered = data.getBoolean(Downloader.EVEN_IF_METERED, false);
 
-        Log.i(TAG, "commandDownload force=" + force + ", maxTracks=" + maxTracks);
+        Log.i(TAG, "commandDownload evenIfMetered=" + evenIfMetered + ", maxTracks=" + maxTracks);
 
-        if (!force && downloadDiscouraged(context))
-            maxTracks = 0;
+        // ident: If set, then download only this track, regardless of the
+        // auto-download setting, since the user explicitly asked for it.
+        // (downloadAudios() does the actual downloadDiscouraged() check and
+        // bypass for this, so there's no need to duplicate it here.)
+        String ident = data.getString(IDENT_EXTRA);
 
         // then-start: If true, then after finishing the download, start playing the 1st track
         boolean thenStart = data.getBoolean(THEN_START_EXTRA, false);
-
-        // ident: If set, then download only this track
-        String ident = data.getString(IDENT_EXTRA);
 
         PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         if (power == null)
@@ -431,16 +475,16 @@ public final class Downloader extends Worker {
         if (wakeLock == null)
             return;
         try {
-            ++running;
-            if (running != 1)
-                Note.w(TAG, "Oops, running=" + running);
+            int n = running.incrementAndGet();
+            if (n != 1)
+                Note.w(TAG, "Oops, running=" + n);
             else {
                 wakeLock.acquire(10 * 60 * 1000L /*10 minutes*/);
-                checkDownloads(context, force, maxTracks, thenStart, ident);
+                checkDownloads(context, label, evenIfMetered, maxTracks, thenStart, ident);
             }
         }
         finally {
-            --running;
+            running.decrementAndGet();
             wakeLock.release();
         }
     }
@@ -453,40 +497,64 @@ public final class Downloader extends Worker {
             Note.w(TAG, "commandDeleteTrack: No ident specified");
             return;
         }
+        // This worker may run in a fresh process where the static track list
+        // was never populated; make sure it is before looking up the ident.
+        Tracks.restore(context, false);
         Track track = Tracks.findTrackByIdent(ident);
         if (track == null) {
             Note.w(TAG, "commandDeleteTrack: No such track: " + ident);
             return;
         }
         Log.i(TAG, "commandDeleteTrack: " + ident);
+        // Record the delete durably before touching the server.  The tombstone
+        // is cleared only once a full server poll no longer offers the track:
+        // a bare "OK" from ?rm= isn't proof (unlink() can fail silently, or
+        // something may re-stage the track), so we don't trust it.
+        Tracks.noteDeleted(context, ident);
         if (!track.downloaded)
             removeFromServer(context, ident);
         track.deleteFiles(context);
         Tracks.restore(context, true);
+        // Force the next poll to do a full listing, so it promptly observes
+        // the track's absence and clears the tombstone.
+        since = -1;
     }
 
-    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    public static boolean isWifi(@NonNull Context context) {
+    public static boolean isMetered(@NonNull Context context) {
         ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (cm == null)
-            return false; // Don't know, assume no
-        return !cm.isActiveNetworkMetered();
+        if (cm == null) {
+            Log.w(TAG, "No ConnectivityManager");
+            return true; // Don't know, assume yes
+        }
+        return cm.isActiveNetworkMetered();
     }
 
-    static boolean downloadDiscouraged(@NonNull Context context) {
-        if (!isWifi(context)) {
-            Log.i(TAG, "Not on Wi-Fi, download discouraged");
-            return true;
+    private static boolean downloadDiscouraged(@NonNull Context context,
+                                               boolean evenIfMetered) {
+        switch (mAutoDownload) {
+            case ALWAYS:
+                Log.i(TAG, "Auto download always");
+                return false;
+            case NEVER:
+                Log.i(TAG, "Auto download never");
+                return true;
+            case UNMETERED:
+                if (!isMetered(context)) {
+                    Log.i(TAG, "Auto download because unmetered");
+                    return false;
+                }
+                if (evenIfMetered) {
+                    Log.i(TAG, "Metered but download anyhow");
+                    return false;
+                }
+                Log.i(TAG, "Metered, download discouraged");
+                return true;
         }
-        if (!mAutoDownloadOnWifi) {
-            Log.i(TAG, "Not autoDownloadOnWifi, download discouraged");
-            return true;
-        }
-        Log.i(TAG, "On Wi-Fi, download not discouraged");
+        Log.e(TAG, "Invalid mAutoDownload: " + mAutoDownload);
         return false;
     }
 
-    private final static String UPDATE_URL = "http://www.waxrat.com/podcasts.php";
+    private final static String UPDATE_URL = "https://www.waxrat.com/podcasts.php";
 
     @NonNull
     private static URL makePollUrl(@NonNull Context context, int since) throws MalformedURLException {
@@ -496,7 +564,8 @@ public final class Downloader extends Worker {
         spec.append(Utilities.urlEncode(Utilities.password(context)));
         if (Tracks.haveTracks()) {
             spec.append("&r=");
-            spec.append((Tracks.remMs() + 500) / 1000);
+            int remMs = Tracks.remMs() - Tracks.remMs('X') - Tracks.remMs('Y');
+            spec.append((remMs + 500) / 1000);
         }
         if (since != -1) {
             spec.append("&s=");
@@ -520,9 +589,18 @@ public final class Downloader extends Worker {
     /* The timestamp (POSIX time - seconds since 1970) of the last .tag file seen on the server */
     private static int since = -1;
 
+    /* Whether the last tagsToDownload() poll asked for a full listing (no &s= cursor) */
+    private boolean lastPollWasFull = false;
+
     @Nullable
     private Tags[] tagsToDownload(@NonNull Context context) {
         // Check the web server to see if new tracks are available.
+
+        if (Tracks.numDownloadable() == 0)
+            // We think we're caught up, so clear `since` in case we've actually gotten out of sync with the server somehow
+            since = -1;
+        lastPollWasFull = (since == -1);
+
         BufferedReader br = null;
         ArrayList<Tags> downloads = new ArrayList<>();
         int tracksOnServer = -1;
@@ -549,9 +627,9 @@ public final class Downloader extends Worker {
             }
             /*
               The podcasts.php script delivers to us the contents of all .tag
-              files as constructed by pod-feed.  Consecutive tag files are
-              separated by a single blank line.  The end of the output is the
-              line "OK" to help us ensure we got the whole output.
+              files.  Consecutive tag files are separated by a single blank
+              line.  The end of the output is the line "OK" to help us ensure
+              we got the whole output.
              */
             br = new BufferedReader(new InputStreamReader(h.getInputStream()));
             ArrayList<String> tagLines = new ArrayList<>();
@@ -642,7 +720,7 @@ public final class Downloader extends Worker {
         return downloads.toArray(new Tags[0]);
     }
 
-    /* Pull the audio file from the server and move it into Tracks.FOLDER.
+    /* Pull the audio file from the server and move it into Utilities.getFolder.
        If successful, return true. */
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     private boolean downloadAudio(@NonNull Context context, @NonNull Track track,
@@ -699,6 +777,11 @@ public final class Downloader extends Worker {
                 out.write(data, 0, count);
                 downloadedSize += count;
 
+                if (track.deleted) {
+                    Log.i(TAG, "Track was deleted while downloading: " + track);
+                    break;
+                }
+
                 int percentage = (int) (100 * downloadedSize / track.size);
                 if (percentage != lastPercentage) {
                     lastPercentage = percentage;
@@ -752,6 +835,13 @@ public final class Downloader extends Worker {
                     String.valueOf(downloadedSize));
         }
 
+        if (track.deleted) {
+            if (!dest.delete())
+                Note.w(TAG, "Couldn't delete " + dest);
+            removeFromServer(context, track.ident);
+            return false;
+        }
+
         if (downloadedSize != track.size) {
             Note.e(TAG, "Downloaded " + downloadedSize + " bytes, expected " +
                     track.size + " for " + track);
@@ -761,14 +851,24 @@ public final class Downloader extends Worker {
         }
         Log.i(TAG, "Download successful: " + track);
 
-        File installed = new File(folder, track.ident + ".mp3");
-        if (!dest.renameTo(installed)) {
-            Note.w(TAG, "Couldn't rename " + dest + " to " + installed);
+        File tagFile = track.getTagFile(context);
+        if (!tagFile.exists()) {
+            // The user deleted the track while we were downloading it
+            Log.i(TAG, "Tag file is gone " + tagFile);
+            if (!dest.delete())
+                Note.w(TAG, "Couldn't delete " + dest);
+            removeFromServer(context, track.ident);
+            return false;
+        }
+
+        File audioFile = track.getAudioFile(context);
+        if (!dest.renameTo(audioFile)) {
+            Note.w(TAG, "Couldn't rename " + dest + " to " + audioFile);
             if (!dest.delete())
                 Note.w(TAG, "Couldn't delete " + dest);
             return false;
         }
-        Log.i(TAG, "Renamed " + dest + " to " + installed);
+        Log.i(TAG, "Renamed " + dest + " to " + audioFile);
 
         Tracks.restore(context, true);
 
@@ -782,13 +882,14 @@ public final class Downloader extends Worker {
             }
             catch (IllegalStateException exc) {
                 // Not allowed to start service Intent: app is in background
-                Note.w(TAG, "downloadFile: Couldn't start service: " + exc.getMessage());
+                Note.w(TAG, "Couldn't start service: " + exc.getMessage());
             }
         }
         removeFromServer(context, track.ident);
         return true;
     }
 
+    /* Ask the server to forget about `ident`.  Return true if the server confirmed. */
     private void removeFromServer(@NonNull Context context, @NonNull String ident) {
         Log.i(TAG, "removeFromServer " + ident);
         BufferedReader br = null;
@@ -800,8 +901,8 @@ public final class Downloader extends Worker {
             h.setReadTimeout(15000);
             h.connect();
             br = new BufferedReader(new InputStreamReader(h.getInputStream()));
-            String line;
             boolean ok = false;
+            String line;
             while ((line = br.readLine()) != null) {
                 if (line.equals("OK")) {
                     ok = true;
@@ -816,14 +917,14 @@ public final class Downloader extends Worker {
         }
         catch (java.net.ConnectException ex) {
             // Likely transient networking problem
-            Note.w(TAG, "ConnectException in removeFromServer");
+            Note.w(TAG, "ConnectException in removeFromServer: " + ident);
         }
         catch (java.net.SocketTimeoutException ex) {
             // Likely transient networking problem
-            Note.w(TAG, "Timeout in removeFromServer");
+            Note.w(TAG, "Timeout in removeFromServer: " + ident);
         }
         catch (Exception ex) {
-            Note.e(TAG, "Exception in removeFromServer " + ex.getMessage(), ex);
+            Note.e(TAG, "Exception in removeFromServer: " + ident + " - " + ex.getMessage(), ex);
         }
         finally {
             if (br != null)
@@ -831,7 +932,7 @@ public final class Downloader extends Worker {
                     br.close();
                 }
                 catch (IOException ex) {
-                    Note.e(TAG, "Exception closing reader", ex);
+                    Note.e(TAG, "Exception closing reader: " + ident, ex);
                 }
         }
     }

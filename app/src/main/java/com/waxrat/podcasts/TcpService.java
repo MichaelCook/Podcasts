@@ -42,6 +42,7 @@ public class TcpService extends Service {
     static final String NFY_TRACK_FINISHED = "NFY\tTRACK-FINISHED";
     static final String NFY_CLIENT_CONNECT = "NFY\tCLIENT-CONNECT";
     static final String NFY_VOLUME_UPDATED = "NFY\tVOLUME-UPDATED";
+    static final String NFY_SPEED_UPDATED = "NFY\tSPEED-UPDATED";
 
     @Override
     public void onCreate() {
@@ -62,29 +63,47 @@ public class TcpService extends Service {
         super.onDestroy();
     }
 
-    @Override
-    public int onStartCommand(@NonNull Intent intent, int flags, int startId) {
-        String action = intent.getAction();
-        if (action == null)
-            return START_NOT_STICKY;
+    static public void maybeStart(@NonNull Context context) {
+        if (!mClients.isEmpty())
+            return;
+        try {
+            Intent in = new Intent(ACTION_TCP_BIND);
+            in.setPackage(Utilities.PACKAGE);
+            context.startService(in);
+            Log.i(TAG, "Sent TCP_BIND");
+        }
+        catch (IllegalStateException exc) {
+            // Not allowed to start service Intent: app is in background
+            Note.w(TAG, "Couldn't send TCP_BIND: " + exc.getMessage());
+        }
+    }
 
-        Log.i(TAG, "onStartCommand " + action);
-        switch (action) {
-            case ACTION_TCP_BIND:
-                if (mServerSocket != null) {
-                    Log.i(TAG, "Already bound");
-                    break;
-                }
-                Log.i(TAG, "Binding...");
-                Thread serverThread = new Thread(new ServerThread(this));
-                serverThread.start();
-                break;
-            default:
-                Note.w(TAG, "Unexpected action " + action);
-                break;
+    @Override
+    public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
+        if (intent == null) {
+            Log.i(TAG, "onStartCommand: No intent");
+            return START_STICKY; // Restart this service if killed
+        }
+        String action = intent.getAction();
+        if (action == null) {
+            Log.i(TAG, "onStartCommand: No action");
+            return START_STICKY; // Restart this service if killed
         }
 
-        return START_NOT_STICKY; // Don't restart this service if killed
+        Log.i(TAG, "onStartCommand " + action);
+        if (action.equals(ACTION_TCP_BIND)) {
+            if (mServerSocket != null) {
+                Log.i(TAG, "Already bound");
+                return START_STICKY; // Restart this service if killed
+            }
+            Log.i(TAG, "Binding...");
+            Thread serverThread = new Thread(new ServerThread(this));
+            serverThread.start();
+        } else {
+            Note.w(TAG, "Unexpected action " + action);
+        }
+
+        return START_STICKY; // Restart this service if killed
     }
 
     @NonNull
@@ -114,6 +133,7 @@ public class TcpService extends Service {
                 // See also: adb shell netstat -plant | grep -w 4004
                 mServerSocket = new ServerSocket(4004);
 
+                //noinspection InfiniteLoopStatement
                 while (true) {
                     Log.d(TAG, "ServerThread: accept...");
                     Socket clientSocket = mServerSocket.accept();
@@ -148,13 +168,11 @@ public class TcpService extends Service {
         if (mClients.isEmpty())
             return;
         String line = makeLine(args);
-        if (Utilities.isMainThread()) {
-            // Launch a thread to avoid NetworkOnMainThreadException
-            Thread thread = new Thread(() -> broadcastLine(line));
-            thread.start();
-        } else {
-            broadcastLine(line);
-        }
+        // Always do the socket I/O on its own thread: besides avoiding
+        // NetworkOnMainThreadException when called from the main thread,
+        // callers may be holding a lock (e.g. Tracks.class) that must not
+        // be blocked on a stalled client's socket write.
+        new Thread(() -> broadcastLine(line)).start();
     }
 
     static int numClients() {
@@ -221,7 +239,7 @@ public class TcpService extends Service {
             }
 
             broadcast(NFY_CLIENT_CONNECT, "DISCONNECT", String.valueOf(numClients()), mAddress,
-                      authenticated ? "true" : "false");
+                      Boolean.toString(authenticated));
             Log.d(TAG, "ClientThread...done");
         }
 
@@ -230,7 +248,7 @@ public class TcpService extends Service {
                                  @NonNull String cmd,
                                  @NonNull String ident,
                                  @NonNull String value) {
-            if (!ok.isPresent())
+            if (ok.isEmpty())
                 sendLine(makeLine("ERR", cmd, "No such track", ident));
             else if (ok.get())
                 sendLine(makeLine("OK", cmd, "updated", ident, value));
@@ -346,22 +364,25 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd));
                     continue;
                 }
-                // DOWNLOAD-TRACKS force max-tracks then-start
-                if (cmd.equals("DOWNLOAD-TRACKS") && f.length <= 4) {
-                    boolean force = false;
+                // DOWNLOAD-TRACKS even-if-metered max-tracks then-start label
+                if (cmd.equals("DOWNLOAD-TRACKS") && f.length <= 5) {
+                    boolean evenIfMetered = false;
                     int maxTracks = -1;
                     boolean thenStart = false;
+                    String label = "tcp-client";
 
                     int i = 0;
                     if (++i < f.length)
-                        force = Boolean.parseBoolean(f[i]);
+                        evenIfMetered = Boolean.parseBoolean(f[i]);
                     if (++i < f.length)
                         maxTracks = Integer.parseInt(f[i]);
                     if (++i < f.length)
                         thenStart = Boolean.parseBoolean(f[i]);
+                    if (++i < f.length)
+                        label = f[i];
 
                     Log.i(TAG, "Download " + maxTracks + " " + thenStart);
-                    Downloader.downloadNow(mContext, "tcp", force, maxTracks, thenStart, null);
+                    Downloader.downloadNow(mContext, label, evenIfMetered, maxTracks, thenStart, null);
                     sendLine(makeLine("OK", cmd, String.valueOf(maxTracks), String.valueOf(thenStart)));
                     continue;
                 }
@@ -373,11 +394,11 @@ public class TcpService extends Service {
                     setListItems();
                     continue;
                 }
-                if (cmd.equals("SET-TRACK-EMOJI") && f.length == 3) {
-                    String emoji = f[1];
+                if (cmd.equals("SET-TRACK-MEMO") && f.length == 3) {
+                    String memo = f[1];
                     String ident = f[2];
-                    Optional<Boolean> ok = Tracks.setEmoji(mContext, ident, emoji);
-                    sendUpdated(ok, cmd, ident, emoji);
+                    Optional<Boolean> ok = Tracks.setMemo(mContext, ident, memo);
+                    sendUpdated(ok, cmd, ident, memo);
                     continue;
                 }
                 if (cmd.equals("SET-TRACK-TITLE") && f.length == 3) {
@@ -413,26 +434,6 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd, Integer.toString(numDeleted)));
                     continue;
                 }
-                if (cmd.equals("DELETE-TRACK") && f.length == 2) {
-                    String ident = f[1];
-                    Track t = Tracks.findTrackByIdent(ident);
-                    if (t == null) {
-                        sendLine(makeLine("ERR", cmd, "No such track", ident));
-                        continue;
-                    }
-                    if (t == Tracks.currentTrack() && MusicService.playing()) {
-                        sendLine(makeLine("ERR", cmd, "Track is playing", ident));
-                        continue;
-                    }
-                    if (t.downloaded) {
-                        t.deleteFiles(mContext);
-                        Tracks.restore(mContext, true);
-                    }
-                    else
-                        Downloader.deleteTrack(mContext, "tcp", ident);
-                    sendLine(makeLine("OK", cmd));
-                    continue;
-                }
                 if (cmd.equals("SELECT-TRACK") && f.length == 2) {
                     String ident = f[1];
                     Track t = Tracks.findTrackByIdent(ident);
@@ -447,19 +448,7 @@ public class TcpService extends Service {
                         sendLine(makeLine("OK", cmd));
                         continue;
                     }
-                    int curMs = 0;
-                    /* If this track is "done", start from the beginning.
-                       Otherwise, start from where we left off last but rewound a little. */
-                    if (!t.isFinished()) {
-                        curMs = t.curMs - MusicService.OVERLAP_MS;
-                        if (curMs < 0)
-                            curMs = 0;
-                    }
-                    Intent in = new Intent(MusicService.ACTION_PLAY);
-                    in.setPackage(Utilities.PACKAGE);
-                    in.putExtra("ident", t.ident);
-                    in.putExtra("ms", curMs);
-                    mContext.startService(in);
+                    mContext.startService(MusicService.makePlayIntent(t));
                     sendLine(makeLine("OK", cmd));
                     continue;
                 }
@@ -502,8 +491,44 @@ public class TcpService extends Service {
                     }
                     continue;
                 }
+                if (cmd.equals("SET-SPEED") && f.length == 2) {
+                    // Step through MusicService's canonical speed list. The phone
+                    // owns the list; clients just ask for UP or DOWN.
+                    float[] speeds = MusicService.SPEEDS;
+                    float cur = MusicService.getPlaybackSpeed();
+                    int idx = 0;
+                    for (int i = 0; i < speeds.length; i++)
+                        if (speeds[i] == cur) {
+                            idx = i;
+                            break;
+                        }
+                    switch (f[1]) {
+                        case "UP":
+                            idx = (idx + 1) % speeds.length;
+                            break;
+                        case "DOWN":
+                            idx = (idx - 1 + speeds.length) % speeds.length;
+                            break;
+                        default:
+                            sendLine(makeLine("ERR", cmd, "Bad argument", f[1]));
+                            continue;
+                    }
+                    float speed = speeds[idx];
+                    Intent in = new Intent(MusicService.ACTION_SET_SPEED);
+                    in.setPackage(Utilities.PACKAGE);
+                    in.putExtra(MusicService.SPEED_EXTRA, speed);
+                    mContext.startService(in);
+                    sendLine(makeLine("OK", cmd, String.valueOf(speed)));
+                    // NFY SPEED-UPDATED is broadcast by MusicService.setPlaybackSpeed,
+                    // covering phone-initiated changes too.
+                    continue;
+                }
                 if (cmd.equals("ECHO")) {
                     broadcast(f);
+
+                    // If the client thinks we're playing, but we're actually paused, it'll keep pinging us.
+                    // So just make sure it knows our current state.
+                    askTo(MusicService.ACTION_GET_STATUS);
                     continue;
                 }
                 if (cmd.equals("BYE") && f.length == 1) {

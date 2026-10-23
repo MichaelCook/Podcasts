@@ -1,7 +1,6 @@
 package com.waxrat.podcasts;
 
 import android.content.Context;
-import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -15,11 +14,11 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
@@ -35,18 +34,32 @@ public class Utilities {
 
     static final String DIGITS = "0123456789abcdef";
 
-    private static String PASSWORD;
+    // The sort order shared by Tags and Track: by priority, then by ident.
+    // See also Track.order() in Track.py
+    static int comparePriorityThenIdent(@NonNull String priorityA, @NonNull String identA,
+                                        @NonNull String priorityB, @NonNull String identB) {
+        int d = priorityA.compareTo(priorityB);
+        if (d != 0)
+            return d;
+        return identA.compareTo(identB);
+    }
+
+    private static String PASSWORD = "";
 
     @NonNull
     static synchronized String password(@NonNull Context context) {
-        if (PASSWORD == null) {
-            PASSWORD = "";
+        if (PASSWORD.isEmpty()) {
+            /* If anything goes wrong here, we'll leave PASSWORD empty so that
+               we'll keep retrying.  Otherwise, if the config file doesn't
+               exist when we first start up and then the config file gets
+               installed later, the user will need to force-stop the app to
+               get it to read the new config file */
             File file = new File(context.getExternalCacheDir(), "_config.txt");
             try {
                 try (BufferedReader br = new BufferedReader(new FileReader(file))) {
                     String line = br.readLine();
                     if (line == null)
-                        Note.w(TAG, "File is empty");
+                        Note.w(TAG, "File is empty: " + file);
                     else {
                         Log.i(TAG, "Got |" + line + "|");
                         PASSWORD = line;
@@ -94,12 +107,7 @@ public class Utilities {
 
     @NonNull
     static String urlEncode(@NonNull String text) {
-        try {
-            return URLEncoder.encode(text, "ISO-8859-1");
-        }
-        catch (UnsupportedEncodingException exc) {
-            return "*oops*";
-        }
+        return URLEncoder.encode(text, StandardCharsets.ISO_8859_1);
     }
 
     private static final SimpleDateFormat sdf =
@@ -121,8 +129,10 @@ public class Utilities {
         return String.format(Locale.US, "%d:%02d:%02d", s / (60 * 60), s / 60 % 60, s % 60);
     }
 
-    static boolean isMainThread() {
-        return Looper.myLooper() == Looper.getMainLooper();
+    @NonNull
+    static String hhmm(int ms) {
+        int s = (ms + 500) / 1000;
+        return String.format(Locale.US, "%d:%02d", s / (60 * 60), s / 60 % 60);
     }
 
     @NonNull
@@ -171,14 +181,14 @@ public class Utilities {
     }
 
     @Nullable
-    static Integer[] integersFromString(@NonNull String value) {
+    static int[] integersFromString(@NonNull String value) {
         if (value.isEmpty())
             return null;
         String[] fields = value.split(" +");
-        Integer[] result = new Integer[fields.length];
+        int[] result = new int[fields.length];
         try {
             for (int i = 0; i < fields.length; ++i)
-                result[i] = Integer.valueOf(fields[i]);
+                result[i] = Integer.parseInt(fields[i]);
         }
         catch (NumberFormatException exc) {
             Note.e(TAG, "Invalid integers '" + value + '\'');
@@ -187,24 +197,13 @@ public class Utilities {
         return result;
     }
 
-    static void integersToString(@NonNull Integer[] ints, @NonNull StringBuilder sb) {
+    static void integersToString(@NonNull int[] ints, @NonNull StringBuilder sb) {
         boolean sep = false;
-        for (Integer i : ints) {
+        for (int i : ints) {
             if (sep)
                 sb.append(' ');
             sb.append(i);
             sep = true;
-        }
-    }
-
-    static boolean sleep(int ms) {
-        try {
-            Thread.sleep(ms);
-            return true;
-        }
-        catch (InterruptedException ex) {
-            Note.e(TAG, "Sleep", ex);
-            return false;
         }
     }
 
@@ -279,7 +278,7 @@ public class Utilities {
         int length;
         while ((length = is.read(buffer)) != -1)
             result.write(buffer, 0, length);
-        return result.toString("UTF-8");
+        return result.toString(StandardCharsets.UTF_8);
     }
 
     @Nullable

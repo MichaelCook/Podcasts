@@ -1,34 +1,3 @@
-/*
- This software is distributed under the "Simplified BSD license":
-
- Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
-
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
-
-    1. Redistributions of source code must retain the above copyright notice,
-       this list of conditions and the following disclaimer.
-
-    2. Redistributions in binary form must reproduce the above copyright
-       notice, this list of conditions and the following disclaimer in the
-       documentation and/or other materials provided with the distribution.
-
- THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
- EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
- The views and conclusions contained in the software and documentation are
- those of the authors and should not be interpreted as representing official
- policies, either expressed or implied, of Michael Cook.
-*/
-
 package com.waxrat.podcasts;
 
 import java.io.BufferedReader;
@@ -39,10 +8,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
@@ -58,7 +29,18 @@ class Tracks {
 
     private final static String STATE_FILE_NAME = "_state.txt";
 
-    /** The last modification time of the tracks folder. */
+    private final static String DELETED_FILE_NAME = "_deleted.txt";
+
+    /**
+     * Idents the user has deleted whose removal from the server has not yet
+     * been confirmed.  Persisted in {@link #DELETED_FILE_NAME} so the intent
+     * survives process death: without it, a later poll of the server could
+     * resurrect a deleted track's .tag file and the track would re-appear.
+     */
+    private static final Set<String> deletedIdents = new HashSet<>();
+    private static boolean deletedIdentsLoaded = false;
+
+    /** The last modification time of the track folder. */
     private static long folderLastMod = -1;
 
     /** All the tracks we currently know about */
@@ -149,7 +131,7 @@ class Tracks {
                 return;
             }
         }
-        Note.w(TAG, "selectTrackByIdent: no such track " + ident);
+        Log.w(TAG, "selectTrackByIdent: no such track " + ident);
     }
 
     @Nullable
@@ -176,6 +158,60 @@ class Tracks {
         return null;
     }
 
+    private static void loadDeletedIdents(@NonNull Context context) {
+        if (deletedIdentsLoaded)
+            return;
+        deletedIdentsLoaded = true;
+        ArrayList<String> lines =
+                Utilities.readFile(new File(Utilities.getFolder(context), DELETED_FILE_NAME));
+        if (lines != null)
+            deletedIdents.addAll(lines);
+    }
+
+    private static void saveDeletedIdents(@NonNull Context context) {
+        StringBuilder sb = new StringBuilder();
+        for (String ident : deletedIdents)
+            sb.append(ident).append('\n');
+        Utilities.writeFile(context, DELETED_FILE_NAME, sb);
+    }
+
+    /** More than this many unconfirmed deletions is worth a warning in the log. */
+    private static final int DELETED_WARN_SIZE = 12;
+
+    /** Record that the user deleted `ident`; its server-side removal may still be pending. */
+    static synchronized void noteDeleted(@NonNull Context context, @NonNull String ident) {
+        loadDeletedIdents(context);
+        if (deletedIdents.add(ident)) {
+            Log.i(TAG, "noteDeleted: " + ident);
+            saveDeletedIdents(context);
+            if (deletedIdents.size() > DELETED_WARN_SIZE)
+                Note.w(TAG, "_deleted.txt has " + deletedIdents.size()
+                        + " unconfirmed entries; server-side removal may be failing");
+        }
+    }
+
+    /** True if the user deleted `ident` and its server-side removal is unconfirmed. */
+    static synchronized boolean isDeleted(@NonNull Context context, @NonNull String ident) {
+        loadDeletedIdents(context);
+        return deletedIdents.contains(ident);
+    }
+
+    /** Forget the deletion of `ident`; its server-side removal is confirmed. */
+    static synchronized void clearDeleted(@NonNull Context context, @NonNull String ident) {
+        loadDeletedIdents(context);
+        if (deletedIdents.remove(ident)) {
+            Log.i(TAG, "clearDeleted: " + ident);
+            saveDeletedIdents(context);
+        }
+    }
+
+    /** A copy of the idents whose server-side removal is unconfirmed. */
+    @NonNull
+    static synchronized Set<String> copyDeletedIdents(@NonNull Context context) {
+        loadDeletedIdents(context);
+        return new HashSet<>(deletedIdents);
+    }
+
     static String getTrackState(@NonNull Track t) {
         StringBuilder sb = new StringBuilder();
 
@@ -198,14 +234,17 @@ class Tracks {
         if (t.quiet != null)
             Utilities.integersToString(t.quiet, sb);
         sb.append('\t');
-        if (t.emoji != null)
-            sb.append(t.emoji);
+        if (t.memo != null)
+            sb.append(t.memo);
         sb.append('\t');
         if (t.feed_url != null)
             sb.append(t.feed_url);
         sb.append('\t');
         if (t.track_url != null)
             sb.append(t.track_url);
+        sb.append('\t');
+        if (t.pubdate != null)
+            sb.append(t.pubdate);
 
         return sb.toString();
     }
@@ -254,7 +293,14 @@ class Tracks {
         for (File tagFile: tagFiles) {
             String ident = Utilities.removeSuffix(tagFile.getName(), ".tag");
 
-            Tags tags = Tags.fromFile(context, ident);
+            Tags tags;
+            try {
+                tags = Tags.fromFile(context, ident);
+            }
+            catch (RuntimeException ex) {
+                Note.e(TAG, "readState: Bad tag file " + tagFile, ex);
+                continue;
+            }
             if (tags == null)
                 continue;
 
@@ -269,7 +315,8 @@ class Tracks {
             // track.downloaded - default
             // this.skipForwardMs - default
             // this.skipBackwardMs - default
-            track.emoji = tags.emoji;
+            track.pubdate = tags.pubdate;
+            track.memo = tags.memo;
             track.feed_url = tags.feed_url;
             track.track_url = tags.track_url;
             track.quiet = tags.quiet;
@@ -407,12 +454,12 @@ class Tracks {
 
             /* There's a potential race here.  Near the top of this function
                we see foo.tag.  Then before we get to this `for` loop, another
-               thread (e.g., TcpService) calls Track.deleteTracks to delete
+               thread (e.g., the Downloader delete worker) calls Track.deleteFiles to delete
                foo.tag & foo.mp3.  Then back in this thread again we get to
                this `for` loop and the two files are gone.  We want to avoid
                sending a spurious NFY_TRACK_UPDATED message which would
                confuse QtEdPod into thinking the `foo` track got re-created.
-               We could use `synchronized` to avoid this problem but it's easy
+               We could use `synchronized` to avoid this problem, but it's easy
                enough to just check if foo.tag still exists */
             File tagFile = track.getTagFile(context);
             if (!tagFile.exists()) {
@@ -437,7 +484,8 @@ class Tracks {
         if (tags == null)
             return;
         track.title = tags.title;
-        track.emoji = tags.emoji;
+        track.pubdate = tags.pubdate;
+        track.memo = tags.memo;
         track.feed_url = tags.feed_url;
         track.track_url = tags.track_url;
         track.artist = tags.artist;
@@ -459,19 +507,12 @@ class Tracks {
     @NonNull
     static List<Track> copyTracks()
     {
-        return copyTracks(new ArrayList<Track>());
+        return copyTracks(new ArrayList<>());
     }
 
     private static class TrackComparator implements Comparator<Track> {
-        // Compare two tracks for sort order.
-        // See also Track.order() in Track.py
         public int compare(@NonNull Track a, @NonNull Track b) {
-            String ap = a.priority;
-            String bp = b.priority;
-            int d = ap.compareTo(bp);
-            if (d != 0)
-                return d;
-            return a.ident.compareTo(b.ident);
+            return Utilities.comparePriorityThenIdent(a.priority, a.ident, b.priority, b.ident);
         }
     }
     private static final TrackComparator trackComparator = new TrackComparator();
@@ -546,28 +587,28 @@ class Tracks {
         return Optional.of(true);
     }
 
-    static synchronized Optional<Boolean> setEmoji(@NonNull Context context, @NonNull String ident,
-                                                   @NonNull String emoji) {
+    static synchronized Optional<Boolean> setMemo(@NonNull Context context, @NonNull String ident,
+                                                  @NonNull String memo) {
         Track t = findTrackByIdent(ident);
         if (t == null)
             return Optional.empty();
 
-        if (emoji.isEmpty()) {
-            if (t.emoji == null)
+        if (memo.isEmpty()) {
+            if (t.memo == null)
                 return Optional.of(false); // unchanged
-            t.emoji = null;
-            Log.i(TAG, "setEmoji: Cleared for " + ident);
+            t.memo = null;
+            Log.i(TAG, "setMemo: Cleared for " + ident);
             notifyTrackUpdated(t);
-            Tags.setEmoji(context, t.ident, t.emoji);
+            Tags.setMemo(context, t.ident, t.memo);
             return Optional.of(true);
         }
 
-        if (t.emoji != null && t.emoji.equals(emoji))
+        if (t.memo != null && t.memo.equals(memo))
             return Optional.of(false); // unchanged
-        t.emoji = emoji;
-        Log.i(TAG, "setEmoji: Set " + emoji + " for " + ident);
+        t.memo = memo;
+        Log.i(TAG, "setMemo: Set " + memo + " for " + ident);
         notifyTrackUpdated(t);
-        Tags.setEmoji(context, t.ident, t.emoji);
+        Tags.setMemo(context, t.ident, t.memo);
         return Optional.of(true);
     }
 
@@ -622,6 +663,15 @@ class Tracks {
         return ms;
     }
 
+    // How much time remains in the given priority class
+    static synchronized int remMs(int priorityClass) {
+        int ms = 0;
+        for (Track t : tracks)
+            if (t.priorityClassChar() == priorityClass)
+                ms += t.remMs();
+        return ms;
+    }
+
     static synchronized int numTracks() {
         return tracks.size();
     }
@@ -642,12 +692,7 @@ class Tracks {
         return numRewound;
     }
 
-    // Tracks with this emoji won't be automatically deleted
-    private static final String KEEP_EMOJI = "🌟";
-
     static private boolean isFinishedDeletable(@NonNull Track track) {
-        if (track.emoji != null && track.emoji.contains(KEEP_EMOJI))
-            return false;
         if (track.durMs == 0)
             return false;
         return track.isFinished();
@@ -658,54 +703,113 @@ class Tracks {
     }
 
     static synchronized int deleteFinished(@NonNull Context context) {
+        // Don't delete the currently selected track: a track that just
+        // finished stays selected until MusicService finishes transitioning
+        // off of it, so deleting it here could race with that transition.
+        Track current = currentTrack();
         int numDeleted = 0;
         for (Track t : tracks)
-            if (isFinishedDeletable(t)) {
+            if (t != current && isFinishedDeletable(t)) {
                 t.deleteFiles(context);
                 ++numDeleted;
             }
         return numDeleted;
     }
 
+    private static final class PriorityClassRange {
+        final int startIndex;  // inclusive
+        final int endIndex;    // exclusive
+        PriorityClassRange(int startIndex, int endIndex) {
+            this.startIndex = startIndex;
+            this.endIndex = endIndex;
+        }
+    }
+
+    private static PriorityClassRange getPriorityRange(int priorityClass) {
+        int startIndex = -1, endIndex = -1;
+        int i = 0;
+        for (Track t : tracks) {
+            if (t.priorityClassChar() == priorityClass) {
+                if (startIndex == -1)
+                    startIndex = i;
+                endIndex = i + 1;
+            }
+            i += 1;
+        }
+        if (startIndex == -1)
+            startIndex = endIndex = 0;
+        return new PriorityClassRange(startIndex, endIndex);
+    }
+
+    static synchronized void moveToTop(@NonNull Context context, @NonNull Track track) {
+        boolean moved;
+        do {
+            switch (track.priorityClassChar()) {
+                case 'A': {
+                    PriorityClassRange ar = getPriorityRange('A');
+                    int pos = getPositionOfTrack(track);
+                    if (pos != ar.startIndex)
+                        moveTrackToPosition(context, track, 'A', 0);
+                    moved = true;  // even if we didn't move the track, we need to stop because no moves are possible
+                }
+                break;
+                case 'B': {
+                    PriorityClassRange ar = getPriorityRange('A');
+                    moved = moveTrackToPosition(context, track, 'A', ar.endIndex - ar.startIndex);
+                }
+                break;
+                case 'C': {
+                    PriorityClassRange cr = getPriorityRange('C');
+                    int pos = getPositionOfTrack(track);
+                    if (pos == cr.startIndex) {
+                        PriorityClassRange ar = getPriorityRange('A');
+                        moved = moveTrackToPosition(context, track, 'A', ar.endIndex - ar.startIndex);
+                    } else
+                        moved = moveTrackToPosition(context, track, 'C', 0);
+                }
+                break;
+                default: {
+                    PriorityClassRange cr = getPriorityRange('C');
+                    moved = moveTrackToPosition(context, track, 'C', cr.endIndex - cr.startIndex);
+                }
+                break;
+            }
+        } while (!moved);
+    }
+
     @SuppressLint("DefaultLocale")
-    static synchronized void moveToTop(@NonNull Context context, @NonNull Track track)
-    {
+    private static boolean moveTrackToPosition(@NonNull Context context, @NonNull Track track,
+                                               int priorityClass, int priorityNum) {
+        /* Return true if `track`'s position changes */
         Track wasCurrent = currentTrack();
         if (wasCurrent == null)
-            return;
+            return false;  // this shouldn't ever happen, it would mean `track` was not in `tracks`
 
-        int place = 0;
-        if (track.isTopPriority()) {
-            // `track` is already in the top group.  Move it to the very top
-            int i = 0;
-            for (Track t : tracks) {
-                if (t == track)
-                    continue;
-                if (t.priority.isEmpty())
-                    continue;
-                if (!t.isTopPriority())
-                    continue;
-                ++i;
-                t.priority = String.format("%c%04d", Track.TOP_PRIORITY_CLASS, i);
-                Tracks.notifyTrackUpdated(t);
-                Tags.setPriority(context, t.ident, t.priority);
-            }
-        }
-        else {
-            // `track` is not already in the top group.  Move it to the bottom of the top group
-            int i = 0;
-            for (Track t : tracks) {
-                ++i;
-                if (t.isTopPriority())
-                    place = i;
-            }
-        }
-        track.priority = String.format("%c%04d", Track.TOP_PRIORITY_CLASS, place);
+        int pos = getPositionOfTrack(track);
+        track.priority = String.format("%c%05d", priorityClass, priorityNum);
         Tracks.notifyTrackUpdated(track);
         Tags.setPriority(context, track.ident, track.priority);
 
+        int pNum = 0;
+        for (Track t : tracks) {
+            if (t == track)
+                continue;
+            if (t.priorityClassChar() != priorityClass)
+                continue;
+            if (pNum == priorityNum)
+                pNum++;
+            t.priority = String.format("%c%05d", priorityClass, pNum++);
+            Tracks.notifyTrackUpdated(t);
+            Tags.setPriority(context, t.ident, t.priority);
+        }
+
         tracks.sort(trackComparator);
         selectTrackByIdent(wasCurrent.ident);
-        writeState(context, "moveToTop");
+
+        if (pos == getPositionOfTrack(track))
+            return false;  // position unchanged
+
+        writeState(context, "moveTrackToPosition");
+        return true;
     }
 }

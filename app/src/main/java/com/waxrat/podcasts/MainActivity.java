@@ -1,54 +1,6 @@
-/*
- This software is distributed under the "Simplified BSD license":
-
- Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
-
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
-
-    1. Redistributions of source code must retain the above copyright notice,
-       this list of conditions and the following disclaimer.
-
-    2. Redistributions in binary form must reproduce the above copyright
-       notice, this list of conditions and the following disclaimer in the
-       documentation and/or other materials provided with the distribution.
-
- THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
- EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
- The views and conclusions contained in the software and documentation are
- those of the authors and should not be interpreted as representing official
- policies, either expressed or implied, of Michael Cook.
-*/
-
-/*
- * Copyright (C) 2011 The Android Open Source Project
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package com.waxrat.podcasts;
 
 import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -57,8 +9,9 @@ import java.util.regex.Pattern;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ListActivity;
+import android.graphics.Insets;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -71,6 +24,8 @@ import android.graphics.Color;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.InputType;
 import android.util.Log;
@@ -80,6 +35,7 @@ import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.View.OnLongClickListener;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.AbsListView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -94,10 +50,11 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-public class MainActivity extends ListActivity implements OnClickListener,
+public class MainActivity extends Activity implements OnClickListener,
         OnLongClickListener, OnSeekBarChangeListener {
     private final static String TAG = "Podcasts.MainActivity";
 
+    private ListView listView;
     private Button mPlayButton;
     private Button mForwardButton;
     private Button mRewindButton;
@@ -106,11 +63,15 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private TextView mDownloadableIndicator;
     private TextView mAutoscrollIndicator;
     private Button mAfterTrackButton;
+    private Button mSpeedButton;
     private CheckBox mKeepScreenOnCheckBox;
     private TrackArrayAdapter mTrackArrayAdapter;
 
     private final static String AFTER_TRACK_PREF = "afterTrack";
-    private final static String AUTO_DOWNLOAD_ON_WIFI_PREF = "autoDownloadOnWifi";
+    private final static String AUTO_DOWNLOAD_PREF = "autoDownload";
+    // Index-aligned with MusicService.SPEEDS.
+    private static final String[] SPEED_LABELS = {"½×", "⅔×", "1×", "1¼×", "1½×"};
+    private float mPlaybackSpeed = 1.0f;
 
     /* What to do at the end of the current track */
     enum AfterTrack {
@@ -120,8 +81,6 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     static AfterTrack mAfterTrack = AfterTrack.FIRST;
-
-    private @Nullable ReceiveMessages mReceiver = null;
 
     private boolean mAutoScroll = true;
 
@@ -201,10 +160,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
         int pos = Tracks.currentPosition();
         if (pos == -1)
             return;
-        getListView().smoothScrollToPositionFromTop(pos, 0);
+        listView.smoothScrollToPositionFromTop(pos, 0);
     }
 
     private @Nullable Track lastTrack = null;
+    private int lastPlaying = -1;
 
     private void onPlayStateIntent(@NonNull Intent intent) {
         Tracks.restore(this, false);
@@ -224,10 +184,24 @@ public class MainActivity extends ListActivity implements OnClickListener,
             showTrack();
             return;
         }
+
+        if (intent.hasExtra(MusicService.SPEED_EXTRA)) {
+            mPlaybackSpeed = intent.getFloatExtra(MusicService.SPEED_EXTRA, 1.0f);
+            setSpeedLabel();
+            return;
+        }
         String ident = intent.getStringExtra("ident");
         if (ident != null)
             Tracks.selectTrackByIdent(ident);
-        setPlayPauseImage();
+
+        boolean playing = MusicService.playing();
+        int nowPlaying = playing ? 1 : 0;
+        if (nowPlaying != lastPlaying) {
+            lastPlaying = nowPlaying;
+            setPlayPauseImage();
+            setKeepScreenOn();
+        }
+
         setSeekBar();
 
         Track t = Tracks.currentTrack();
@@ -331,17 +305,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mPlayButton.setKeepScreenOn(kso);
     }
 
-    private int lastPlaying = -1;
-
     private void setPlayPauseImage() {
-        boolean playing = MusicService.playing();
-        int nowPlaying = playing ? 1 : 0;
-        if (nowPlaying != lastPlaying) {
-            lastPlaying = nowPlaying;
-            mPlayButton.setBackgroundResource(playing ? R.drawable.btn_pause
-                    : R.drawable.btn_play);
-            setKeepScreenOn();
-        }
+        mPlayButton.setBackgroundResource(MusicService.playing() ? R.drawable.btn_pause : R.drawable.btn_play);
     }
 
     @Override
@@ -350,6 +315,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         Log.i(TAG, "onResume");
 
         setDriving(isLandscape());
+        setPlayPauseImage();
         setKeepScreenOn();
         setAutoScrollForce(true);
         Tracks.restore(this, true);
@@ -370,19 +336,24 @@ public class MainActivity extends ListActivity implements OnClickListener,
             int requestCode = 1;  // passed to onRequestPermissionsResult but actually unused
             requestPermissions(mPermissionsToRequest, requestCode);
         }
+        checkBatteryOptimizations();
 
-        Downloader.downloadNow(this, "resume", false, -1, false, null);
+        Downloader.downloadOnResume(this);
     }
 
     private boolean mAskPermissions = true;
     private static final String[] mPermissionsToRequest = new String[] {
         Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        Manifest.permission.ACCESS_LOCAL_NETWORK,
     };
 
     private boolean needAnyPermissions() {
         boolean needAny = false;
         for (String permission : mPermissionsToRequest) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED)
+                Log.i(TAG, "Permission already granted: " + permission);
+            else {
                 Note.w(TAG, "Permission not yet granted: " + permission);
                 needAny = true;
             }
@@ -395,10 +366,26 @@ public class MainActivity extends ListActivity implements OnClickListener,
         for (int i = 0; i < permissions.length; ++i) {
             String permission = permissions[i];
             if (grantResults[i] == PackageManager.PERMISSION_GRANTED)
-                Log.i(TAG, "Granted: " + permission);
+                Log.i(TAG, "Permission granted: " + permission);
             else
-                Note.w(TAG, "Denied: " + permission);
+                Note.w(TAG, "Permission denied: " + permission);
         }
+        checkBatteryOptimizations();
+    }
+
+    @SuppressLint("BatteryLife")
+    private void checkBatteryOptimizations() {
+        Intent intent = new Intent();
+        String packageName = getPackageName();
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Log.i(TAG, "Already ignoring battery optimizations");
+            return;
+        }
+        Log.i(TAG, "Requesting to ignore battery optimizations");
+        intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+        intent.setData(Uri.parse("package:" + packageName));
+        startActivity(intent);
     }
 
     @Override
@@ -422,6 +409,15 @@ public class MainActivity extends ListActivity implements OnClickListener,
         Log.i(TAG, "onCreate");
         setContentView(R.layout.main);
 
+        findViewById(R.id.rootLayout).setOnApplyWindowInsetsListener((v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsets.CONSUMED;
+        });
+
+        listView = findViewById(android.R.id.list);
+        listView.setOnItemClickListener((parent, v, position, id) -> showTrackMenu(position));
+
         mPlayButton = findViewById(R.id.playbutton);
         mForwardButton = findViewById(R.id.forwardbutton);
         mRewindButton = findViewById(R.id.rewindbutton);
@@ -430,6 +426,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mDownloadableIndicator = findViewById(R.id.downloadable);
         mAutoscrollIndicator = findViewById(R.id.autoscroll);
         mAfterTrackButton = findViewById(R.id.afterTrack);
+        mSpeedButton = findViewById(R.id.speedbutton);
         mKeepScreenOnCheckBox = findViewById(R.id.keepScreenOn);
 
         mRemainingText.setOnClickListener(this);
@@ -442,6 +439,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mRewindButton.setOnLongClickListener(this);
         mSeekBar.setOnSeekBarChangeListener(this);
         mAfterTrackButton.setOnClickListener(this);
+        mSpeedButton.setOnClickListener(this);
         mKeepScreenOnCheckBox.setOnClickListener(this);
         mKeepScreenOnCheckBox.setOnLongClickListener(this);
 
@@ -449,14 +447,14 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
         mAskPermissions = needAnyPermissions();
 
-        mReceiver = new ReceiveMessages();
-        registerReceiver(mReceiver, new IntentFilter(MusicService.ACTION_PLAY_STATE));
-        registerReceiver(mReceiver, new IntentFilter(Downloader.ACTION_DOWNLOAD_MESSAGE));
-        registerReceiver(mReceiver, new IntentFilter(Downloader.ACTION_DOWNLOAD_STATUS));
-        registerReceiver(mReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
-        registerReceiver(mReceiver, new IntentFilter(Intent.ACTION_MEDIA_BUTTON));
-        registerReceiver(mReceiver, new IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED));
-        registerReceiver(mReceiver, new IntentFilter(Tracks.ACTION_TRACKS_LIST_CHANGED));
+        ReceiveMessages rcv = new ReceiveMessages();
+        registerReceiver(rcv, new IntentFilter(MusicService.ACTION_PLAY_STATE), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(Downloader.ACTION_DOWNLOAD_MESSAGE), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(Downloader.ACTION_DOWNLOAD_STATUS), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(Intent.ACTION_MEDIA_BUTTON), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED), Context.RECEIVER_EXPORTED);
+        registerReceiver(rcv, new IntentFilter(Tracks.ACTION_TRACKS_LIST_CHANGED), Context.RECEIVER_EXPORTED);
 
         SharedPreferences prefs = getPreferences(MODE_PRIVATE);
 
@@ -464,13 +462,18 @@ public class MainActivity extends ListActivity implements OnClickListener,
         mAfterTrack = AfterTrack.valueOf(t);
         setAfterTrackIcon();
 
-        Downloader.mAutoDownloadOnWifi = prefs.getBoolean(AUTO_DOWNLOAD_ON_WIFI_PREF, true);
-        setAutoDownloadOnWifiIndicator();
-        Log.i(TAG, "onCreate: " + autoDownloadOnWifiLabel(Downloader.mAutoDownloadOnWifi));
+        t = prefs.getString(AUTO_DOWNLOAD_PREF, Downloader.AutoDownload.ALWAYS.name());
+        Downloader.mAutoDownload = Downloader.AutoDownload.valueOf(t);
+        setAutoDownloadIndicator();
 
-        Downloader.schedule(this, "main");
+        mPlaybackSpeed = MusicService.getPersistedSpeed(this);
+        setSpeedLabel();
+        askSpeed(mPlaybackSpeed);
+        Log.i(TAG, "onCreate: " + autoDownloadLabel(Downloader.mAutoDownload));
 
-        getListView().setOnScrollListener(new AbsListView.OnScrollListener() {
+        Downloader.schedule(this);
+
+        listView.setOnScrollListener(new AbsListView.OnScrollListener() {
             @Override
             public void onScrollStateChanged(AbsListView view, int scrollState) {
                 /* onResume calls showTrack which then tends to cause FLING followed by IDLE.
@@ -494,23 +497,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        Log.i(TAG, "onDestroy");
-        unregisterReceiver(mReceiver);
-    }
-
-    @Override
     public void onStart() {
         super.onStart();
-        try {
-            askTo(TcpService.ACTION_TCP_BIND);
-            Log.i(TAG, "onStart: Sent TCP_BIND");
-        }
-        catch (IllegalStateException exc) {
-            // Not allowed to start service Intent: app is in background
-            Note.w(TAG, "onStart: Couldn't send TCP_BIND: " + exc.getMessage());
-        }
+        TcpService.maybeStart(this);
     }
 
     @Override
@@ -523,6 +512,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
         TextView text = new TextView(this);
         text.setText(message);
         text.setTextIsSelectable(true);
+        text.setTextSize(24);
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setView(text);
@@ -582,6 +572,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
             setAfterTrack(a);
             return;
         }
+        if (target == mSpeedButton) {
+            askSpeedChoice();
+            return;
+        }
         if (target == mRemainingText) {
             showMainMenu();
             return;
@@ -638,6 +632,43 @@ public class MainActivity extends ListActivity implements OnClickListener,
         SharedPreferences.Editor ed = getPreferences(MODE_PRIVATE).edit();
         ed.putString(AFTER_TRACK_PREF, a.name());
         ed.apply();
+    }
+
+    private int speedIndex() {
+        float[] speeds = MusicService.SPEEDS;
+        for (int i = 0; i < speeds.length; i++)
+            if (speeds[i] == mPlaybackSpeed)
+                return i;
+        return 0;
+    }
+
+    private void setSpeedLabel() {
+        mSpeedButton.setText(SPEED_LABELS[speedIndex()]);
+    }
+
+    private void askSpeedChoice() {
+        AlertDialog.Builder alert = new AlertDialog.Builder(this);
+        alert.setTitle("Playback speed");
+        alert.setCancelable(true);
+        alert.setSingleChoiceItems(SPEED_LABELS, speedIndex(),
+                (dialog, which) -> {
+                    setPlaybackSpeed(MusicService.SPEEDS[which]);
+                    dialog.dismiss();
+                });
+        alert.show();
+    }
+
+    private void setPlaybackSpeed(float speed) {
+        mPlaybackSpeed = speed;
+        setSpeedLabel();
+        askSpeed(speed);
+    }
+
+    private void askSpeed(float speed) {
+        Intent in = new Intent(MusicService.ACTION_SET_SPEED);
+        in.setPackage(Utilities.PACKAGE);
+        in.putExtra(MusicService.SPEED_EXTRA, speed);
+        startService(in);
     }
 
     public boolean onLongClick(@NonNull View target) {
@@ -707,6 +738,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
         private final LayoutInflater inflater = (LayoutInflater)
           MainActivity.this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
 
+        /* The title's color as it comes from the layout, captured from a
+           freshly inflated row before any row recolors its title. */
+        private int mDefaultTitleColor;
+
         TrackArrayAdapter() {
             super(MainActivity.this, R.layout.track_list, Tracks.copyTracks(viewedTracks));
         }
@@ -738,8 +773,17 @@ public class MainActivity extends ListActivity implements OnClickListener,
             TextView durationView = rowView.findViewById(R.id.duration);
             TextView nextQuietView = rowView.findViewById(R.id.nextQuiet);
             TextView titleView = rowView.findViewById(R.id.title);
+            // Capture the title's default color but only from a fresh row,
+            // not a recycled row which may already be yellow from the
+            // setTextColor below.
+            if (convertView == null)
+                mDefaultTitleColor = titleView.getCurrentTextColor();
             titleView.setTextSize(mIsDriving ? 36 : 24);
             Track t = Tracks.track(position);
+            // Classes X and Y are the most interesting: bright yellow title.
+            // Any other row restores the layout color, since rows recycle.
+            int pcc = t == null ? -1 : t.priorityClassChar();
+            titleView.setTextColor(pcc == 'X' || pcc == 'Y' ? Color.YELLOW : mDefaultTitleColor);
             if (t == null) {
                 titleView.setText("Position " + position + " of " + Tracks.numTracks());
                 percentView.setText("");
@@ -747,28 +791,19 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 nextQuietView.setText("");
             }
             else {
-                StringBuilder sb = new StringBuilder();
-                sb.append(priorityGlyph(t.priorityClassChar())).append(' ');
-                if (t.emoji != null && !t.emoji.isEmpty())
-                    sb.append(t.emoji).append(' ');
-                sb.append(t.title);
-                // "🔹" U+1F539: SMALL BLUE DIAMOND
-                sb.append(" \uD83D\uDD39 ");
-                sb.append(t.artist);
-                titleView.setText(sb.toString());
+                String sb = priorityGlyph(t.priorityClassChar()) + ' ' + t.title + " 🔹 " + t.artist;
+                titleView.setText(sb);
 
                 if (mDownloadIdent != null && mDownloadIdent.equals(t.ident)) {
-                    // "🌀" U+1F300: CYCLONE
-                    percentView.setText("\uD83C\uDF00");
+                    percentView.setText("🌀");
                     nextQuietView.setText("");
                 }
                 else if (!t.downloaded) {
-                    // "🚩" U+1F6A9: TRIANGULAR FLAG ON POST
-                    percentView.setText("\uD83D\uDEA9");
+                    percentView.setText("🚩");
                     nextQuietView.setText("");
                 }
                 else if (t.isFinished()) {
-                    percentView.setText("Done");
+                    percentView.setText("✅");
                     nextQuietView.setText("");
                 }
                 else if (t.curMs == 0) {
@@ -777,7 +812,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
                 }
                 else {
                     double per = 100.0 * t.curMs / t.durMs;
-                    percentView.setText(String.format(Locale.US, "%.0f%%", per));
+                    percentView.setText(String.format(Locale.US, "%.0f﹪", per));
                     nextQuietView.setText(nextQuiet(t));
                 }
 
@@ -788,8 +823,8 @@ public class MainActivity extends ListActivity implements OnClickListener,
             else if (position == 0)
                 rowView.setBackgroundColor(Color.BLUE);
             else {
-                final int DKGREEN = (255 << 24) | (15 << 16) | (89 << 8) | 35; // ARGB
-                rowView.setBackgroundColor(DKGREEN);
+                int color = (255 << 24) | (15 << 16) | (89 << 8) | 35; // dark green
+                rowView.setBackgroundColor(color);
             }
             return rowView;
         }
@@ -797,13 +832,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     /* Time (as a string "0:00") until the next quiet period.
        Or the empty string if there is no next quiet period. */
+    @NonNull
     private static String nextQuiet(@NonNull Track t) {
-        if (t.quiet != null)
-            for (int q : t.quiet) {
-                int ms = q - t.curMs;
-                if (ms >= 0)
-                    return Utilities.mmss(ms);
-            }
+        int ms = t.nextQuiet(t.curMs);
+        if (ms != -1 && (ms -= t.curMs) >= 0)
+            return Utilities.mmss(ms);
         return "";
     }
 
@@ -815,24 +848,25 @@ public class MainActivity extends ListActivity implements OnClickListener,
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append('"')
-                .append(t.title)
-                .append("\"\n\n")
-                .append(t.ident)
-                .append("\n\n");
-        sb.append("Priority: \"").append(t.priority).append("\"\n\n");
-        sb.append("Artist: \"").append(t.artist).append("\"\n\n");
-        sb.append(Utilities.mmss(t.curMs))
-                .append(" + ")
-                .append(Utilities.mmss(t.remMs()))
-                .append(" = ")
-                .append(Utilities.mmss(t.durMs));
+        sb.append('“').append(t.title).append('”');
+        sb.append("\n\n").append("Artist: “").append(t.artist).append('”');
+        sb.append("\n").append("Priority: “").append(t.priority).append('”');
+        if (t.pubdate != null)
+            sb.append("\nPublished: “").append(t.pubdate).append('”');
+        if (t.memo != null)
+            sb.append("\nMemo: “").append(t.memo).append('”');
+
+        sb.append("\n\n").append(Utilities.mmss(t.curMs))
+            .append(" + ")
+            .append(Utilities.mmss(t.remMs()))
+            .append(" = ")
+            .append(Utilities.mmss(t.durMs));
 
         int remMs = 0;
         switch (mAfterTrack) {
         case FIRST:
-            /* Show how long until this track will finish playing if all lower-numbered
-               tracks are played first. */
+            /* Show how long until this track will finish playing if all
+               lower-numbered tracks are played first. */
             for (int pos = 0; pos <= position; ++pos) {
                 Track u = Tracks.track(pos);
                 if (u != null)
@@ -852,10 +886,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
             remMs = t.remMs();
             break;
         }
-        sb.append("\n\nFinish in ");
-        sb.append(Utilities.hhmmss(remMs));
-        sb.append(" on ");
-        sb.append(Utilities.timestampStr(System.currentTimeMillis() + remMs));
+        sb.append("\n\nFinish in ")
+            .append(Utilities.hhmmss(remMs))
+            .append(" on ")
+            .append(Utilities.timestampStr(System.currentTimeMillis() + remMs));
 
         sb.append("\n\nDownloaded ").append(Utilities.timestampStr(t.when * 1000));
 
@@ -865,10 +899,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
     private void setListItems() {
         if (mTrackArrayAdapter == null) {
             mTrackArrayAdapter = new TrackArrayAdapter();
-            setListAdapter(mTrackArrayAdapter);
+            listView.setAdapter(mTrackArrayAdapter);
         }
-        ListView lv = getListView();
-        lv.setOnItemLongClickListener((parent, view, position, id) -> {
+        listView.setOnItemLongClickListener((parent, view, position, id) -> {
             Track t = Tracks.track(position);
             if (t != null)
                 playTrack(t, false);
@@ -894,24 +927,7 @@ public class MainActivity extends ListActivity implements OnClickListener,
             TcpService.broadcast(TcpService.NFY_TRACK_SELECTED, t.ident);
             return;
         }
-        int curMs = 0;
-        /* If this track is "done", start from the beginning.
-           Otherwise, start from where we left off last but rewound a little. */
-        if (!t.isFinished()) {
-            curMs = t.curMs - MusicService.OVERLAP_MS;
-            if (curMs < 0)
-                curMs = 0;
-        }
-        Intent in = new Intent(MusicService.ACTION_PLAY);
-        in.setPackage(Utilities.PACKAGE);
-        in.putExtra("ident", t.ident);
-        in.putExtra("ms", curMs);
-        startService(in);
-    }
-
-    @Override
-    protected void onListItemClick(ListView list, View v, int position, long id) {
-        showTrackMenu(position);
+        startService(MusicService.makePlayIntent(t));
     }
 
     private void deleteFinished() {
@@ -941,42 +957,27 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     (dialog, id) -> rewindAll());
     }
 
-    private void startDownload(int maxTracks, boolean thenStart) {
-        Downloader.downloadNow(this, "max-then", true, maxTracks, thenStart, null);
+    private void startDownload(boolean thenStart) {
+        Downloader.downloadNow(this, "max-then", true, -1, thenStart, null);
     }
 
     private void startDownload(@NonNull String onlyIdent, boolean thenStart) {
         Downloader.downloadNow(this, "only", true, -1, thenStart, onlyIdent);
     }
 
+    private static final String[] priorityGlyphs = {
+        "🅐", "🅑", "🅒", "🅓", "🅔", "🅕", "🅖", "🅗", "🅘", "🅙", "🅚", "🅛", "🅜",
+        "🅝", "🅞", "🅟", "🅠", "🅡", "🅢", "🅣", "🅤", "🅥", "🅦", "🅧", "🅨", "🅩",
+    };
+
     @NonNull
     private static String priorityGlyph(int c) {
+        if (c >= 'A' && c <= 'Z')
+            return priorityGlyphs[c - 'A'];
         if (c == -1)
             return "";
-        if (c >= 'A' && c <= 'Z') {
-            // 🅐 … 🅩 : NEGATIVE CIRCLED LATIN CAPITAL LETTER A-Z
-            byte[] b = {        // UTF-8 encoding
-                (byte) 0xF0,
-                (byte) 0x9F,
-                (byte) 0x85,
-                (byte) (0x90 + (c & 0x1f) - 1)
-            };
-            return new String(b, StandardCharsets.UTF_8);
-        }
-        if (c >= 'a' && c <= 'z') {
-            // ⓐ … ⓩ : CIRCLED LATIN SMALL LETTER A-Z
-            byte[] b = {        // UTF-8 encoding
-                (byte) 0xE2,
-                (byte) 0x93,
-                (byte) (0x90 + (c & 0x1f) - 1)
-            };
-            return new String(b, StandardCharsets.UTF_8);
-        }
-        if (c >= '!' && c <= '~') {
-            return "(" + String.valueOf((char) c) + ")";
-        }
         // c is int, so this will be like "<1234>"
-        return "<" + String.valueOf(c) + ">";
+        return "<" + c + ">";
     }
 
     private static void addPriorityItem(@NonNull ArrayList<CharSequence> pcs, int pcc, int numTracks,
@@ -1024,7 +1025,6 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     private static int findByGlyph(@NonNull String item) {
         // Find the index of the first track that's using this item's priority glyph
-        List<Track> tracks = Tracks.copyTracks();
         int i = 0;
         for (Track track : Tracks.copyTracks()) {
             String pg = priorityGlyph(track.priorityClassChar());
@@ -1037,7 +1037,10 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     private void askPriorities() {
         AlertDialog.Builder alert = new AlertDialog.Builder(this);
-        alert.setTitle("Priorities");
+        int remMs = Tracks.remMs();
+        int remMsX = Tracks.remMs('X');
+        int remMsY = Tracks.remMs('Y');
+        alert.setTitle("Priorities " + Utilities.hhmm(remMs - remMsX - remMsY) + " + " + Utilities.hhmm(remMsX + remMsY));
         alert.setCancelable(true);
         CharSequence[] items = makePriorityItems();
         alert.setSingleChoiceItems(items, 0,
@@ -1045,40 +1048,24 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     int pos = findByGlyph(items[which].toString());
                     if (pos != -1) {
                         setAutoScroll(false);
-                        getListView().smoothScrollToPositionFromTop(pos, 0);
+                        listView.smoothScrollToPositionFromTop(pos, 0);
                     }
                     dialog.dismiss();
                 });
         alert.show();
     }
 
-    private void maybeAskDownload(int maxTracks, boolean thenStart) {
+    private void maybeAskDownload(boolean thenStart) {
         if (Downloader.isRunning()) {
             toastShort("Already checking");
             return;
         }
-        if (!Downloader.isWifi(this)) {
-            confirm("Download", "Not on Wi-Fi, are you sure?",
-                    (dialog, id) -> startDownload(maxTracks, thenStart));
+        if (Downloader.mAutoDownload != Downloader.AutoDownload.ALWAYS && Downloader.isMetered(this)) {
+            confirm("Download", "Metered network, are you sure?",
+                    (dialog, id) -> startDownload(thenStart));
             return;
         }
-        startDownload(maxTracks, thenStart);
-    }
-
-    private void drivingDownload(int maxTracks) {
-        if (Downloader.isRunning()) {
-            toastShort("Already checking");
-            return;
-        }
-        startDownload(maxTracks, true);
-    }
-
-    private void downloadNone() {
-        if (Downloader.isRunning()) {
-            toastShort("Already checking");
-            return;
-        }
-        startDownload(0, false);
+        startDownload(thenStart);
     }
 
     private boolean isPlaying(@NonNull Track track) {
@@ -1102,8 +1089,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
                         track.deleteFiles(this);
                         Tracks.restore(this, true);
                     }
-                    else
-                        Downloader.deleteTrack(this, "ask", track.ident);
+                    else {
+                        // May be downloading right now; tell it to stop
+                        track.deleted = true;
+                        Downloader.deleteTrack(this, track.ident);
+                    }
                 });
     }
 
@@ -1170,41 +1160,54 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
     private void showStatus() {
         Log.i(TAG, "showStatus...");
-        StringBuilder sb = new StringBuilder();
 
-        sb.append("IP address: ").append(Utilities.getIpAddress());
-        sb.append("\nClients: ").append(TcpService.numClients());
-        sb.append("\nTracks: ").append(Tracks.numTracks());
-        sb.append("\nDownloadable: ").append(Tracks.numDownloadable());
-        sb.append("\nHours remaining: ").append(Utilities.hhmmss(Tracks.remMs()));
+        String status = "IP address: " + Utilities.getIpAddress() +
+                "\nClients: " + TcpService.numClients() +
+                "\nTracks: " + Tracks.numTracks() +
+                "\nDownloadable: " + Tracks.numDownloadable() +
+                "\nHours remaining: " + Utilities.hhmmss(Tracks.remMs()) +
+                "\nDisk free: " + diskFree() +
+                "\nBuilt: " + Utilities.timestampStr(BuildConfig.BUILD_TIME) +
+                "\nVersion: " + BuildConfig.VERSION_CODE;
 
-        sb.append("\nDisk free: ").append(diskFree());
-
-        sb.append("\nBuilt: ");
-        sb.append(Utilities.timestampStr(BuildConfig.BUILD_TIME));
-
-        alert("Status", sb.toString());
+        alert("Status", status);
         Log.i(TAG, "showStatus...done");
     }
 
     @NonNull
-    static String autoDownloadOnWifiLabel(boolean enabled) {
-        return enabled
-                ? "Auto download on Wi-Fi"
-                : "No auto download";
+    static String autoDownloadLabel(Downloader.AutoDownload mode) {
+        switch (mode) {
+            case ALWAYS:
+                return "Always auto download";
+            case NEVER:
+                return "Never auto download";
+            case UNMETERED:
+                return "Auto download when unmetered";
+        }
+        return "Invalid auto download: " + mode;
     }
 
-    void setAutoDownloadOnWifiIndicator() {
-        mRemainingText.setTextColor(Downloader.mAutoDownloadOnWifi ? Color.WHITE : Color.RED);
+    void setAutoDownloadIndicator() {
+        switch (Downloader.mAutoDownload) {
+            case ALWAYS:
+                mRemainingText.setTextColor(Color.WHITE);
+                break;
+            case NEVER:
+                mRemainingText.setTextColor(Color.RED);
+                break;
+            case UNMETERED:
+                mRemainingText.setTextColor(Color.BLUE);
+                break;
+        }
     }
 
-    void setAutoDownloadOnWifi(boolean enable) {
-        Downloader.mAutoDownloadOnWifi = enable;
+    void setAutoDownload(Downloader.AutoDownload mode) {
+        Downloader.mAutoDownload = mode;
         SharedPreferences.Editor ed = getPreferences(MODE_PRIVATE).edit();
-        ed.putBoolean(AUTO_DOWNLOAD_ON_WIFI_PREF, enable);
+        ed.putString(AUTO_DOWNLOAD_PREF, mode.name());
         ed.apply();
-        setAutoDownloadOnWifiIndicator();
-        Note.toastLong(this, autoDownloadOnWifiLabel(Downloader.mAutoDownloadOnWifi));
+        setAutoDownloadIndicator();
+        Note.toastLong(this, autoDownloadLabel(mode));
     }
 
     void playFirstTrack() {
@@ -1214,17 +1217,14 @@ public class MainActivity extends ListActivity implements OnClickListener,
     }
 
     private static final int
-        MAIN_MENU_PLAY_FIRST_TRACK = 0,
-        MAIN_MENU_DOWNLOAD_NONE = 1,
-        MAIN_MENU_DOWNLOAD_ALL = 2,
-        MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 3,
-        MAIN_MENU_PRIORITIES = 4,
-        MAIN_MENU_DELETE_FINISHED = 5,
-        MAIN_MENU_REWIND_ALL = 6,
-        MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI = 7,
-        MAIN_MENU_STATUS = 8,
-        MAIN_MENU_LAUNCH_BROWSER = 9,
-        MAIN_MENU_SIZE = 10;
+        MAIN_MENU_DOWNLOAD_ALL = 0,
+        MAIN_MENU_DOWNLOAD_ALL_AND_PLAY = 1,
+        MAIN_MENU_DELETE_FINISHED = 2,
+        MAIN_MENU_REWIND_ALL = 3,
+        MAIN_MENU_AUTO_DOWNLOAD = 4,
+        MAIN_MENU_STATUS = 5,
+        MAIN_MENU_LAUNCH_BROWSER = 6,
+        MAIN_MENU_SIZE = 7;
 
     private void showMainMenu() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
@@ -1236,13 +1236,11 @@ public class MainActivity extends ListActivity implements OnClickListener,
             ? "Delete finished" : "(Delete finished)";
         mi[MAIN_MENU_DOWNLOAD_ALL] = "Download all";
         mi[MAIN_MENU_DOWNLOAD_ALL_AND_PLAY] = "Download all and play";
-        mi[MAIN_MENU_DOWNLOAD_NONE] = "Download none";
         mi[MAIN_MENU_REWIND_ALL] = Tracks.numRewindable() != 0
             ? "Rewind all" : "(Rewind all)";
-        mi[MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI] = autoDownloadOnWifiLabel(!Downloader.mAutoDownloadOnWifi);
-        mi[MAIN_MENU_PRIORITIES] = "Priorities";
+        mi[MAIN_MENU_AUTO_DOWNLOAD] =
+            autoDownloadLabel(Downloader.mAutoDownload.next());
         mi[MAIN_MENU_STATUS] = "Status";
-        mi[MAIN_MENU_PLAY_FIRST_TRACK] = "Play first track";
         mi[MAIN_MENU_LAUNCH_BROWSER] = "Launch browser";
 
         builder.setItems(mi, (dialog, which) -> {
@@ -1252,36 +1250,32 @@ public class MainActivity extends ListActivity implements OnClickListener,
                     deleteFinished();
                     break;
                 case MAIN_MENU_DOWNLOAD_ALL:
-                    maybeAskDownload(-1, false);
+                    maybeAskDownload(false);
                     break;
                 case MAIN_MENU_DOWNLOAD_ALL_AND_PLAY:
-                    if (mIsDriving)
-                        drivingDownload(-1);
-                    else
-                        maybeAskDownload(-1, true);
-                    break;
-                case MAIN_MENU_DOWNLOAD_NONE:
-                    downloadNone();
+                    if (Downloader.isRunning()) {
+                        toastShort("Already checking");
+                        return;
+                    }
+                    if (mIsDriving) {
+                        // Driving, so just do it without asking
+                        startDownload(true);
+                        break;
+                    }
+                    maybeAskDownload(true);
                     break;
                 case MAIN_MENU_REWIND_ALL:
                     askRewindAll();
                     break;
-                case MAIN_MENU_AUTO_DOWNLOAD_ON_WIFI:
-                    setAutoDownloadOnWifi(!Downloader.mAutoDownloadOnWifi);
-                    break;
-                case MAIN_MENU_PRIORITIES:
-                    askPriorities();
+                case MAIN_MENU_AUTO_DOWNLOAD:
+                    setAutoDownload(Downloader.mAutoDownload.next());
                     break;
                 case MAIN_MENU_STATUS:
                     showStatus();
                     break;
-                case MAIN_MENU_PLAY_FIRST_TRACK:
-                    setAutoScroll(true);
-                    playFirstTrack();
-                    break;
                 case MAIN_MENU_LAUNCH_BROWSER:
                     // Handy if there's a captive portal blocking our access
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.waxrat.com")));
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.waxrat.com")));
                     break;
             }
             dialog.dismiss();
@@ -1306,9 +1300,9 @@ public class MainActivity extends ListActivity implements OnClickListener,
 
         CharSequence[] mi = new CharSequence[TRACK_MENU_SIZE];
         mi[TRACK_MENU_INFO] = "Info";
-        mi[TRACK_MENU_DELETE] = ! isPlaying(track) ?
-            "Delete" : "(Delete)";
-        mi[TRACK_MENU_MOVE_TO_TOP] = position != 0 || ! track.isTopPriority()
+        mi[TRACK_MENU_DELETE] = ! isPlaying(track)
+            ? "Delete" : "(Delete)";
+        mi[TRACK_MENU_MOVE_TO_TOP] = position != 0 || track.priorityClassChar() != 'A'
             ? "Move to top" : "(Move to top)";
         mi[TRACK_MENU_REWIND] = track.curMs != 0
             ? "Rewind" : "(Rewind)";
@@ -1369,28 +1363,20 @@ public class MainActivity extends ListActivity implements OnClickListener,
         alert.setTitle("Edit Priority");
         alert.setCancelable(true);
 
-        alert.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                String newPriority = input.getText().toString();
-                if (newPriority.length() == 1) {
-                    newPriority += t.priority.substring(1);
-                }
-                if (newPriority.equals(t.priority)) {
-                    Note.toastLong(MainActivity.this, "Priority unchanged: " + newPriority);
-                    return;
-                }
-                Note.toastLong(MainActivity.this, "New priority: " + newPriority);
-                Tracks.setPriority(MainActivity.this, t.ident, newPriority);
-                setListItems();
+        alert.setPositiveButton("OK", (dialog, which) -> {
+            String newPriority = input.getText().toString();
+            if (newPriority.length() == 1) {
+                newPriority += t.priority.substring(1);
             }
-        });
-        alert.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-                dialog.cancel();
+            if (newPriority.equals(t.priority)) {
+                Note.toastLong(MainActivity.this, "Priority unchanged: " + newPriority);
+                return;
             }
+            Note.toastLong(MainActivity.this, "New priority: " + newPriority);
+            Tracks.setPriority(MainActivity.this, t.ident, newPriority);
+            setListItems();
         });
+        alert.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
 
         AlertDialog alertDialog = alert.create();
         alertDialog.show();

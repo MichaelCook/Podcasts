@@ -1,34 +1,3 @@
-/*
- This software is distributed under the "Simplified BSD license":
-
- Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
-
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
-
-    1. Redistributions of source code must retain the above copyright notice,
-       this list of conditions and the following disclaimer.
-
-    2. Redistributions in binary form must reproduce the above copyright
-       notice, this list of conditions and the following disclaimer in the
-       documentation and/or other materials provided with the distribution.
-
- THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
- EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
- The views and conclusions contained in the software and documentation are
- those of the authors and should not be interpreted as representing official
- policies, either expressed or implied, of Michael Cook.
-*/
-
 package com.waxrat.podcasts;
 
 import android.content.Context;
@@ -41,8 +10,6 @@ import java.io.File;
 final class Track {
     private final static String TAG = "Podcasts.Track";
 
-    static final int TOP_PRIORITY_CLASS = 'A';
-
     @NonNull final String ident;
     @NonNull String title;
     @NonNull String artist;
@@ -52,11 +19,13 @@ final class Track {
     int durMs;
     long when;
     boolean downloaded;    // True if we have the .mp3 audio file for this track
+    volatile boolean deleted;    // Set when the user deletes this track, possibly while it's downloading
     final int skipForwardMs, skipBackwardMs;
-    @Nullable String emoji;
+    @Nullable String pubdate;
+    @Nullable String memo;
     @Nullable String feed_url;
     @Nullable String track_url;
-    @Nullable Integer[] quiet;
+    @Nullable int[] quiet;
 
     Track(@NonNull String ident) {
         this.ident = ident;
@@ -68,21 +37,23 @@ final class Track {
         this.durMs = 0;
         this.when = 0;
         this.downloaded = false;
+        this.deleted = false;
         this.skipForwardMs = 30000;
         this.skipBackwardMs = 10000;
-        this.emoji = null;
+        this.pubdate = null;
+        this.memo = null;
         this.feed_url = null;
         this.track_url = null;
         this.quiet = null;
     }
 
-    // The audio file name relative to Tracks.FOLDER
+    // The audio file name relative to Utilities.getFolder
     @NonNull
     String audioFileName() {
         return ident + ".mp3";
     }
 
-    // The tag file name relative to Tracks.FOLDER
+    // The tag file name relative to Utilities.getFolder
     @NonNull
     static String tagFileName(@NonNull String ident) {
         return ident + ".tag";
@@ -121,15 +92,6 @@ final class Track {
             Note.w(TAG, "Could not delete " + file);
     }
 
-    // The track's priority class as a single-character string, or the empty
-    // string if the class has no priority (which would be unusual but
-    // strictly speaking possible)
-    @NonNull String priorityClass() {
-        if (priority.isEmpty())
-            return "";
-        return priority.substring(0, 1);
-    }
-
     // The track's priority class as a character, or -1 if the class has no
     // priority (which would be unusual but strictly speaking possible)
     int priorityClassChar() {
@@ -146,13 +108,38 @@ final class Track {
         return remMs() == 0;
     }
 
-    boolean isTopPriority() {
-        return priorityClassChar() == TOP_PRIORITY_CLASS;
-    }
-
     @NonNull
     @Override
     public String toString() {
         return ident + '@' + curMs + '/' + durMs;
+    }
+
+    // Find the next quiet period greater than `wanted`.
+    // Return the period (milliseconds) or -1 if there is none.
+    int nextQuiet(int wanted) {
+        if (quiet == null)
+            return -1;
+
+        // ChatGPT says if the array is this small then a linear search
+        // is competetive or even faster than a binary search.
+        if (quiet.length < 16) {
+            for (int ms : quiet)
+                if (ms > wanted)
+                    return ms;
+            return -1;
+        }
+
+        int lo = 0;
+        int hi = quiet.length;
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (quiet[mid] <= wanted)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo == quiet.length)
+            return -1;
+        return quiet[lo];
     }
 }

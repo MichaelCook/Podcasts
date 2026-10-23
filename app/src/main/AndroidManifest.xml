@@ -6,17 +6,17 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <application android:icon="@drawable/ic_launcher"
         android:label="@string/app_title"
-        android:supportsRtl="false"
-        android:usesCleartextTraffic="true">
+        android:supportsRtl="false">
 
         <activity android:name=".MainActivity"
             android:launchMode="singleTask"
@@ -28,8 +28,15 @@
             </intent-filter>
         </activity>
 
-        <service android:exported="false" android:name=".MusicService">
+        <service
+            android:name=".MusicService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false">
             <intent-filter>
+                <!-- MediaSessionService intent filter for media button events -->
+                <action android:name="androidx.media3.session.MediaSessionService" />
+
+                <!-- Your custom actions -->
                 <action android:name="com.waxrat.podcasts.action.DELETE_FINISHED" />
                 <action android:name="com.waxrat.podcasts.action.GET_STATUS" />
                 <action android:name="com.waxrat.podcasts.action.MAYBE_PAUSE" />
@@ -37,6 +44,7 @@
                 <action android:name="com.waxrat.podcasts.action.PLAY" />
                 <action android:name="com.waxrat.podcasts.action.RESTORE" />
                 <action android:name="com.waxrat.podcasts.action.SEEK" />
+                <action android:name="com.waxrat.podcasts.action.SET_SPEED" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_BACK" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_FORWARD" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_TO_TRACK_END" />
@@ -46,27 +54,11 @@
             </intent-filter>
         </service>
 
-        <service android:exported="false" android:name=".TcpService">
+        <service android:name=".TcpService" android:exported="false">
             <intent-filter>
                 <action android:name="com.waxrat.podcasts.action.TCP_BIND" />
             </intent-filter>
         </service>
-
-        <!-- This receiver has no effect other than to cause my car to enable the forward/reverse
-             buttons on the steering wheel & console.  No intents are ever actually received.  Hmm. -->
-        <receiver android:name=".MusicIntentReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON" />
-            </intent-filter>
-        </receiver>
-
-        <receiver android:name=".BootCompletedReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
 
     </application>
 </manifest>

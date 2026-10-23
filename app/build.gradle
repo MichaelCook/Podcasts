@@ -1,25 +1,52 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 33
+    compileSdkVersion 37
+
+    buildFeatures {
+        // Enable the buildConfigField feature
+        buildConfig = true
+    }
 
     defaultConfig {
         applicationId "com.waxrat.podcasts"
-        minSdkVersion 33
-        targetSdkVersion 33
+        minSdk 37
+        targetSdk 37
         buildConfigField("long", "BUILD_TIME", System.currentTimeMillis() + "L")
+
+        // Gemini says: Android's package manager is biased toward the highest
+        // versionCode.  If your debug build has the same or lower code than a
+        // previous "ghost" install, the system will favor the older one.
+        // versionCode has a maximum value of 2,147,483,647.
+        // `date -d@1770440400` is "Sat Feb  7 00:00:00 EST 2026".
+        def v = ((System.currentTimeMillis() / 1000 - 1770440400) / 60).toInteger()
+        println "versionCode: ${v}"
+        versionCode v
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+            // Allow the R8 compiler to perform modern code optimizations that significantly
+            // reduce app size and improve performance.
+            minifyEnabled true
+
+            // Optional, highly recommended to reduce app size further
+            shrinkResources true
+
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     namespace 'com.waxrat.podcasts'
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
 }
 
 dependencies {
-    implementation 'com.android.support:support-compat:33.0.0'
-    implementation 'androidx.work:work-runtime:2.7.1'
+    implementation 'androidx.work:work-runtime:2.11.2'
+    implementation 'androidx.media3:media3-exoplayer:1.11.0'
+    implementation 'androidx.media3:media3-session:1.11.0'
+    //implementation 'androidx.media3:media3-ui:1.8.0'       // For UI components like PlayerView
 }

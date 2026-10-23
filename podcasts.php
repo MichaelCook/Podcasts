@@ -16,9 +16,11 @@
     return $tags;
   }
 
+  header("Content-type: text/plain");
+
   $fh = fopen("../podcasts.cfg", "r");
   if (!$fh) {
-    trigger_error("open failed in |" . getcwd() . "|");
+    echo "ERROR: open failed in |" . getcwd() . "|\n";
     exit;
   }
   $dir = trim(fgets($fh));
@@ -26,24 +28,24 @@
   fclose($fh);
 
   if (!chdir($dir)) {
-    trigger_error("chdir '$dir' failed in |" . getcwd() . "|");
+    echo "ERROR: chdir '$dir' failed in |" . getcwd() . "|\n";
     exit;
   }
 
   // Don't require a password for 'polled' so pod-poll doesn't need it
   if (isset($_GET["polled"])) {
     header("Content-type: text/plain");
-    echo count(get_tags()), " ", file_get_contents("polled");
+    echo filemtime("polled"), " ", count(get_tags()), " ", file_get_contents("polled");
     exit;
   }
 
   // Password check.
   if (!isset($_GET["p"])) {
-    trigger_error("Access denied");
+    echo "ERROR: Access denied\n";
     exit;
   }
   if ($_GET["p"] != $pass) {
-    trigger_error("Access denied: |" . $_GET["p"] . "|");
+    echo "ERROR: Access denied\n";
     exit;
   }
 
@@ -51,12 +53,12 @@
     $id = $_GET["get"];
 
     if (strstr($id, "/") !== false) {
-      trigger_error("Invalid ID '$id'");
+      echo "ERROR: Invalid ID '$id'\n";
       exit;
     }
     $file = $id . ".mp3";
     if (!file_exists($file)) {
-      trigger_error("File does not exist '$file'");
+      echo "ERROR: File does not exist '$file'\n";
       exit;
     }
 
@@ -76,7 +78,7 @@
     $id = $_GET["rm"];
 
     if (strstr($id, "/") !== false) {
-      trigger_error("Invalid ID '$id'");
+      echo "ERROR: Invalid ID '$id'\n";
       exit;
     }
     unlink($id . ".mp3");
@@ -87,11 +89,6 @@
     exit;
   }
 
-  $dh = opendir(".");
-  if (!$dh) {
-    trigger_error("opendir failed");
-    exit;
-  }
   $tags = get_tags();
 
   // remaining seconds
@@ -108,6 +105,7 @@
     $mtime = filemtime($tag);
     $newest = max($newest, $mtime);
     if ($since === false || $mtime > $since) {
+      // file_put_contents("log", "send newest=$newest mtime=$mtime tag=$tag\n", FILE_APPEND);
       readfile($tag);
       echo "\n";
     }

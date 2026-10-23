@@ -20,8 +20,9 @@ class Tags {
     @NonNull String artist;          // "Here+Now"
     long size;                       // audio file size (bytes)
     long when;                       // when the track was pulled from the feed (POSIX time, seconds)
-    @Nullable Integer[] quiet;       // offsets of periods of quiet (milliseconds)
-    @Nullable String emoji;          // "🚀"
+    @Nullable int[] quiet;           // offsets of periods of quiet (milliseconds), sorted ascending
+    @Nullable String pubdate;        // "2026/1/5"
+    @Nullable String memo;           // extra notes about the track
     @Nullable String feed_url;
     @Nullable String track_url;
 
@@ -58,7 +59,6 @@ class Tags {
                 case "id":
                     self_ident = value;
                     break;
-                case "prio":    // TODO: obsolete
                 case "priority":
                     self_priority = value;
                     break;
@@ -80,8 +80,11 @@ class Tags {
                 case "quiet":
                     this.quiet = Utilities.integersFromString(value);
                     break;
-                case "emoji":
-                    this.emoji = value;
+                case "pubdate":
+                    this.pubdate = value;
+                    break;
+                case "memo":
+                    this.memo = value;
                     break;
                 case "feed_url":
                     this.feed_url = value;
@@ -159,9 +162,15 @@ class Tags {
             sb.append('\n');
         }
 
-        if (emoji != null) {
-            sb.append("emoji\t");
-            sb.append(emoji);
+        if (pubdate != null) {
+            sb.append("pubdate\t");
+            sb.append(pubdate);
+            sb.append('\n');
+        }
+
+        if (memo != null) {
+            sb.append("memo\t");
+            sb.append(memo);
             sb.append('\n');
         }
 
@@ -188,10 +197,10 @@ class Tags {
         }
     }
 
-    public static void setEmoji(@NonNull Context context, @NonNull String ident, @NonNull String emoji) {
+    public static void setMemo(@NonNull Context context, @NonNull String ident, @NonNull String memo) {
         Tags tags = Tags.fromFile(context, ident);
         if (tags != null) {
-            tags.emoji = emoji;
+            tags.memo = memo;
             tags.writeFile(context, true);
         }
     }
