@@ -1,7 +1,9 @@
 package com.waxrat.podcasts;
 
 import java.io.Serializable;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -49,12 +51,14 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 public class MainActivity extends Activity implements OnClickListener,
         OnLongClickListener, OnSeekBarChangeListener {
     private final static String TAG = "Podcasts.MainActivity";
 
     private ListView listView;
+    private SwipeRefreshLayout mSwipeRefreshLayout;
     private Button mPlayButton;
     private Button mForwardButton;
     private Button mRewindButton;
@@ -62,6 +66,7 @@ public class MainActivity extends Activity implements OnClickListener,
     private TextView mRemainingText;
     private TextView mDownloadableIndicator;
     private TextView mAutoscrollIndicator;
+    private TextView mSleepTimerIndicator;
     private Button mAfterTrackButton;
     private Button mSpeedButton;
     private CheckBox mKeepScreenOnCheckBox;
@@ -125,6 +130,60 @@ public class MainActivity extends Activity implements OnClickListener,
             break;
         }
         mDownloadableIndicator.setText(msg);
+    }
+
+    // ---- sleep timer indicator ----
+
+    /** Refresh the sleep timer indicator from the service's remaining time. */
+    private void setSleepTimerIndicator() {
+        setSleepTimerIndicator(MusicService.sleepTimerRemainingMs());
+    }
+
+    /** Show the sleep timer countdown, like QtEdPod's "Sleep in m:ss".
+        @param remainingMs milliseconds left, or negative when no countdown is pending. */
+    private void setSleepTimerIndicator(long remainingMs) {
+        mSleepTimerIndicator.setText(remainingMs >= 0 ? "sleep in " + Utilities.mmss(remainingMs) : "");
+    }
+
+    // Keep in sync with QtEdPod's sleep timer choices
+    // (choices in show_sleep_timer_dialog in App.py): same 10/20/30/Off list.
+    private static final String[] SLEEP_TIMER_LABELS = {"10 minutes", "20 minutes", "30 minutes", "Off"};
+    private static final int[] SLEEP_TIMER_MINUTES = {10, 20, 30, 0};
+
+    /** Find the sleep timer menu position matching the persisted setting.
+        @return the index into SLEEP_TIMER_LABELS/SLEEP_TIMER_MINUTES, or the
+            Off index when the persisted value is not one of the choices. */
+    private int sleepTimerChoiceIndex() {
+        int minutes = MusicService.getPersistedSleepTimerMinutes(this);
+        for (int i = 0; i < SLEEP_TIMER_MINUTES.length; i++)
+            if (SLEEP_TIMER_MINUTES[i] == minutes)
+                return i;
+        return SLEEP_TIMER_MINUTES.length - 1;
+    }
+
+    /** Show the "Sleep timer" menu: 10, 20, or 30 minutes, or Off. */
+    private void askSleepTimerChoice() {
+        AlertDialog.Builder alert = new AlertDialog.Builder(this);
+        alert.setTitle("Sleep timer");
+        alert.setCancelable(true);
+        alert.setSingleChoiceItems(SLEEP_TIMER_LABELS, sleepTimerChoiceIndex(),
+                (dialog, which) -> {
+                    setSleepTimer(SLEEP_TIMER_MINUTES[which]);
+                    dialog.dismiss();
+                });
+        alert.show();
+    }
+
+    /** Send a new sleep timer setting to the service and update the indicator.
+        @param minutes the setting in minutes, 0 = off. */
+    private void setSleepTimer(int minutes) {
+        Intent in = new Intent(MusicService.ACTION_SET_SLEEP_TIMER);
+        in.setPackage(Utilities.PACKAGE);
+        in.putExtra(MusicService.SLEEP_TIMER_MINUTES_EXTRA, minutes);
+        startService(in);
+        // Optimistic: show the full duration until the service's
+        // play-state broadcast refreshes it with the true remaining time.
+        setSleepTimerIndicator(minutes > 0 ? minutes * 60L * 1000L : -1);
     }
 
     // ---- seek bar ----
@@ -203,6 +262,7 @@ public class MainActivity extends Activity implements OnClickListener,
         }
 
         setSeekBar();
+        setSleepTimerIndicator();
 
         Track t = Tracks.currentTrack();
         if (lastTrack != t) {
@@ -228,6 +288,10 @@ public class MainActivity extends Activity implements OnClickListener,
         mDownloadNumTracks = intent.getIntExtra(Downloader.NUM_TRACKS_STATUS_EXTRA, -1);
         mDownloadIdent = intent.getStringExtra(Downloader.IDENT_EXTRA);
         setDownloadable();
+        // The pull-to-refresh spinner spins only while a download run is
+        // actually polling or downloading.
+        if (!Downloader.POLLING_STATUS.equals(status) && !Downloader.DOWNLOADING_STATUS.equals(status))
+            mSwipeRefreshLayout.setRefreshing(false);
     }
 
     class ReceiveMessages extends BroadcastReceiver {
@@ -310,6 +374,14 @@ public class MainActivity extends Activity implements OnClickListener,
     }
 
     @Override
+    /* Report any touch or key in this activity to the service as a user
+       interaction, resetting the sleep timer's inactivity countdown. */
+    public void onUserInteraction() {
+        super.onUserInteraction();
+        askTo(MusicService.ACTION_USER_INTERACTION);
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         Log.i(TAG, "onResume");
@@ -320,6 +392,8 @@ public class MainActivity extends Activity implements OnClickListener,
         setAutoScrollForce(true);
         Tracks.restore(this, true);
         setDownloadable();
+        setSleepTimerIndicator();
+        askTo(MusicService.ACTION_USER_INTERACTION);
         setListItems();
         showTrack();
 
@@ -418,6 +492,28 @@ public class MainActivity extends Activity implements OnClickListener,
         listView = findViewById(android.R.id.list);
         listView.setOnItemClickListener((parent, v, position, id) -> showTrackMenu(position));
 
+        // Pull-to-refresh on the track list starts a "download all" check,
+        // the same action as the main menu's Download all item.
+        mSwipeRefreshLayout = findViewById(R.id.swipeRefresh);
+        mSwipeRefreshLayout.setOnRefreshListener(() -> {
+            if (Downloader.isRunning()) {
+                toastShort("Already checking");
+                mSwipeRefreshLayout.setRefreshing(false);
+                return;
+            }
+            if (Downloader.mAutoDownload != Downloader.AutoDownload.ALWAYS && Downloader.isMetered(this)) {
+                // The spinner stops while the dialog is up; Yes restarts it with the run.
+                mSwipeRefreshLayout.setRefreshing(false);
+                confirm("Download", "Metered network, are you sure?",
+                        (dialog, id) -> {
+                            startDownload(false);
+                            mSwipeRefreshLayout.setRefreshing(true);
+                        });
+                return;
+            }
+            startDownload(false);
+        });
+
         mPlayButton = findViewById(R.id.playbutton);
         mForwardButton = findViewById(R.id.forwardbutton);
         mRewindButton = findViewById(R.id.rewindbutton);
@@ -425,6 +521,7 @@ public class MainActivity extends Activity implements OnClickListener,
         mRemainingText = findViewById(R.id.remainingText);
         mDownloadableIndicator = findViewById(R.id.downloadable);
         mAutoscrollIndicator = findViewById(R.id.autoscroll);
+        mSleepTimerIndicator = findViewById(R.id.sleeptimer);
         mAfterTrackButton = findViewById(R.id.afterTrack);
         mSpeedButton = findViewById(R.id.speedbutton);
         mKeepScreenOnCheckBox = findViewById(R.id.keepScreenOn);
@@ -544,7 +641,13 @@ public class MainActivity extends Activity implements OnClickListener,
         // Send the correct intent to the MusicService, according to the button
         // that was clicked
         if (target == mPlayButton) {
+            // Pressing this button — and only this button — disables the
+            // sleep timer, so morning play after a night's timer needs no
+            // manual switch-off. Other play/pause paths (QtEdPod, earbud,
+            // notification) never come through here and leave the timer
+            // alone.
             if (MusicService.playing()) {
+                setSleepTimer(0);
                 setListItems();
                 askTo(MusicService.ACTION_PAUSE);
                 return;
@@ -554,6 +657,7 @@ public class MainActivity extends Activity implements OnClickListener,
                 Note.toastLong(this, "No track");
                 return;
             }
+            setSleepTimer(0);
             playTrack(t, true);
             return;
         }
@@ -671,6 +775,39 @@ public class MainActivity extends Activity implements OnClickListener,
         startService(in);
     }
 
+    /** Ask the service to seek the current track.
+        @param ms the position in milliseconds to seek to. */
+    private void askSeek(int ms) {
+        Intent in = new Intent(MusicService.ACTION_SEEK);
+        in.setPackage(Utilities.PACKAGE);
+        in.putExtra("where", ms);
+        startService(in);
+    }
+
+    /** Label for the "rewind to last interaction" menu item.
+        @return "Rewind to last interaction (h:mm a)" when the last interaction
+            belongs to the current track, or the parenthesized (disabled) form
+            when there is no such point. */
+    private String rewindToLastInteractionLabel() {
+        Track t = Tracks.currentTrack();
+        String ident = MusicService.lastInteractionIdent();
+        if (t == null || ident == null || !ident.equals(t.ident))
+            return "(Rewind to last interaction)";
+        String time = new SimpleDateFormat("h:mm a", Locale.US)
+                .format(new Date(MusicService.lastInteractionMs()));
+        return "Rewind to last interaction (" + time + ")";
+    }
+
+    /** Seek the current track to the last interaction point, if that point
+        belongs to the current track. Does nothing otherwise. */
+    private void rewindToLastInteraction() {
+        Track t = Tracks.currentTrack();
+        String ident = MusicService.lastInteractionIdent();
+        if (t == null || ident == null || !ident.equals(t.ident))
+            return;
+        askSeek(MusicService.lastInteractionCurMs());
+    }
+
     public boolean onLongClick(@NonNull View target) {
         if (target == mForwardButton) {
             askTo(MusicService.ACTION_SKIP_TO_TRACK_END);
@@ -685,6 +822,7 @@ public class MainActivity extends Activity implements OnClickListener,
             return true; // consumed the click
         }
         if (target == mPlayButton) {
+            setSleepTimer(0);
             setAutoScroll(true);
             playFirstTrack();
             return true; // consumed the click
@@ -1224,7 +1362,22 @@ public class MainActivity extends Activity implements OnClickListener,
         MAIN_MENU_AUTO_DOWNLOAD = 4,
         MAIN_MENU_STATUS = 5,
         MAIN_MENU_LAUNCH_BROWSER = 6,
-        MAIN_MENU_SIZE = 7;
+        MAIN_MENU_SLEEP_TIMER = 7,
+        MAIN_MENU_REWIND_TO_LAST_INTERACTION = 8,
+        MAIN_MENU_SIZE = 9;
+
+    // Adapter for the menus below: items in parens (no effect) are
+    // disabled, so they don't respond to taps. The parens remain the
+    // visual signal; this only controls clickability.
+    private ArrayAdapter<CharSequence> menuAdapter(CharSequence[] mi) {
+        return new ArrayAdapter<>(this,
+                android.R.layout.select_dialog_item, mi) {
+            @Override
+            public boolean isEnabled(int position) {
+                return !mi[position].toString().startsWith("(");
+            }
+        };
+    }
 
     private void showMainMenu() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
@@ -1242,8 +1395,10 @@ public class MainActivity extends Activity implements OnClickListener,
             autoDownloadLabel(Downloader.mAutoDownload.next());
         mi[MAIN_MENU_STATUS] = "Status";
         mi[MAIN_MENU_LAUNCH_BROWSER] = "Launch browser";
+        mi[MAIN_MENU_SLEEP_TIMER] = "Sleep timer";
+        mi[MAIN_MENU_REWIND_TO_LAST_INTERACTION] = rewindToLastInteractionLabel();
 
-        builder.setItems(mi, (dialog, which) -> {
+        builder.setAdapter(menuAdapter(mi), (dialog, which) -> {
             switch (which) {
                 case MAIN_MENU_DELETE_FINISHED:
                     setAutoScroll(true);
@@ -1276,6 +1431,12 @@ public class MainActivity extends Activity implements OnClickListener,
                 case MAIN_MENU_LAUNCH_BROWSER:
                     // Handy if there's a captive portal blocking our access
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.waxrat.com")));
+                    break;
+                case MAIN_MENU_SLEEP_TIMER:
+                    askSleepTimerChoice();
+                    break;
+                case MAIN_MENU_REWIND_TO_LAST_INTERACTION:
+                    rewindToLastInteraction();
                     break;
             }
             dialog.dismiss();
@@ -1315,7 +1476,7 @@ public class MainActivity extends Activity implements OnClickListener,
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Track Menu");
         builder.setCancelable(true);
-        builder.setItems(mi, (dialog, which) -> {
+        builder.setAdapter(menuAdapter(mi), (dialog, which) -> {
             switch (which) {
                 case TRACK_MENU_INFO:
                     showTrackInfo(track);

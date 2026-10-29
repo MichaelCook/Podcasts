@@ -45,12 +45,14 @@
                 <action android:name="com.waxrat.podcasts.action.RESTORE" />
                 <action android:name="com.waxrat.podcasts.action.SEEK" />
                 <action android:name="com.waxrat.podcasts.action.SET_SPEED" />
+                <action android:name="com.waxrat.podcasts.action.SET_SLEEP_TIMER" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_BACK" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_FORWARD" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_TO_TRACK_END" />
                 <action android:name="com.waxrat.podcasts.action.SKIP_TO_TRACK_START" />
                 <action android:name="com.waxrat.podcasts.action.STOP" />
                 <action android:name="com.waxrat.podcasts.action.TOGGLE_PLAYBACK" />
+                <action android:name="com.waxrat.podcasts.action.USER_INTERACTION" />
             </intent-filter>
         </service>
 

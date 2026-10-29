@@ -7,6 +7,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
@@ -49,6 +53,9 @@ public class MusicService
     public static final String ACTION_TOGGLE_PLAYBACK = "com.waxrat.podcasts.action.TOGGLE_PLAYBACK";
     public static final String ACTION_SET_SPEED = "com.waxrat.podcasts.action.SET_SPEED";
     public static final String SPEED_EXTRA = "speed";
+    public static final String ACTION_SET_SLEEP_TIMER = "com.waxrat.podcasts.action.SET_SLEEP_TIMER";
+    public static final String ACTION_USER_INTERACTION = "com.waxrat.podcasts.action.USER_INTERACTION";
+    public static final String SLEEP_TIMER_MINUTES_EXTRA = "sleep_timer_minutes";
 
     /**
      * Canonical playback speeds, slowest to fastest. Shared with MainActivity and TcpService.
@@ -58,6 +65,9 @@ public class MusicService
 
     private static final String SPEED_PREFS = "playback_speed";
     private static final String SPEED_KEY = "speed";
+    private static final String SLEEP_TIMER_PREFS = "sleep_timer";
+    private static final String SLEEP_TIMER_KEY = "minutes";
+    private static final String SLEEP_TIMER_LAST_KEY = "last_minutes";
 
     /** When starting a track, backup this amount from where we left off. */
     public static final int OVERLAP_MS = 250;
@@ -127,6 +137,206 @@ public class MusicService
                 .edit().putFloat(SPEED_KEY, speed).apply();
     }
 
+    /** Minutes of inactivity before the sleep timer pauses playback, 0 = off.
+        Volatile: read from MainActivity's UI thread. */
+    private static volatile int sSleepTimerMinutes = 0;
+
+    /** Wall-clock time of the last user interaction, 0 = none yet. */
+    private static volatile long sLastInteractionMs = 0;
+
+    /** Playback position at the last user interaction. */
+    private static volatile int sLastInteractionCurMs = 0;
+
+    /** Track the last interaction belonged to, null = none yet. */
+    private static volatile @Nullable String sLastInteractionIdent = null;
+
+    /** Wall-clock time when the sleep timer's current countdown ends, or 0
+        when no countdown is pending. */
+    private static volatile long sSleepTimerDeadlineMs = 0;
+
+    /** Get the persisted sleep timer setting, for use at startup and by
+        MainActivity's sleep timer menu.
+        @param context to read the preferences from.
+        @return the persisted setting in minutes, 0 = off. */
+    public static int getPersistedSleepTimerMinutes(@NonNull Context context) {
+        return context.getSharedPreferences(SLEEP_TIMER_PREFS, Context.MODE_PRIVATE)
+                .getInt(SLEEP_TIMER_KEY, 0);
+    }
+
+    /** Persist the sleep timer setting.
+        @param minutes the setting in minutes, 0 = off. */
+    private void persistSleepTimerMinutes(int minutes) {
+        getSharedPreferences(SLEEP_TIMER_PREFS, MODE_PRIVATE)
+                .edit().putInt(SLEEP_TIMER_KEY, minutes).apply();
+    }
+
+    /** Get the last nonzero sleep timer setting, for face-down arming.
+        @return the last nonzero setting in minutes, 10 if none recorded. */
+    private int getLastSleepTimerMinutes() {
+        return getSharedPreferences(SLEEP_TIMER_PREFS, MODE_PRIVATE)
+                .getInt(SLEEP_TIMER_LAST_KEY, 10);
+    }
+
+    /** Persist the last nonzero sleep timer setting, so face-down arming
+        can restore it after the timer was switched off.
+        @param minutes the setting in minutes, nonzero. */
+    private void persistLastSleepTimerMinutes(int minutes) {
+        getSharedPreferences(SLEEP_TIMER_PREFS, MODE_PRIVATE)
+                .edit().putInt(SLEEP_TIMER_LAST_KEY, minutes).apply();
+    }
+
+    /** Get the current sleep timer setting.
+        @return the setting in minutes, 0 = off. */
+    public static int sleepTimerMinutes() {
+        return sSleepTimerMinutes;
+    }
+
+    /** Get the wall-clock time of the last user interaction.
+        @return milliseconds since the epoch, 0 = none yet. */
+    public static long lastInteractionMs() {
+        return sLastInteractionMs;
+    }
+
+    /** Get the playback position at the last user interaction.
+        @return the position in milliseconds. */
+    public static int lastInteractionCurMs() {
+        return sLastInteractionCurMs;
+    }
+
+    /** Get the track the last interaction belonged to.
+        @return the track ident, null = none yet. */
+    public static @Nullable String lastInteractionIdent() {
+        return sLastInteractionIdent;
+    }
+
+    /** Milliseconds until the sleep timer stops playback, or -1 when no
+        countdown is pending.
+        @return the remaining time in milliseconds, or -1. */
+    public static long sleepTimerRemainingMs() {
+        if (sSleepTimerDeadlineMs <= 0)
+            return -1;
+        return Math.max(0L, sSleepTimerDeadlineMs - System.currentTimeMillis());
+    }
+
+    /** Apply a new sleep timer setting and persist it.
+        @param minutes the setting in minutes, 0 = off. */
+    private void setSleepTimer(int minutes) {
+        sSleepTimerMinutes = minutes;
+        persistSleepTimerMinutes(minutes);
+        if (minutes > 0)
+            persistLastSleepTimerMinutes(minutes);
+        Log.i(TAG, "setSleepTimer " + minutes + " minutes");
+        // Keep connected QtEdPod clients in sync no matter where the change
+        // originated (phone menu or a TcpService client).
+        TcpService.broadcast(TcpService.NFY_SLEEP_TIMER_UPDATED, String.valueOf(minutes));
+        // Keep MainActivity's indicator in sync: nothing else repaints it
+        // while paused, so a stale play-state broadcast could otherwise
+        // leave it blank even though the timer is armed.
+        Intent i = new Intent(ACTION_PLAY_STATE);
+        sendBroadcast(i);
+    }
+
+    private final Runnable sleepTimerRunnable = this::onSleepTimerFired;
+
+    /** Restart the inactivity countdown from now. Does nothing when the
+        timer is off. */
+    private void resetSleepTimer() {
+        tickHandler.removeCallbacks(sleepTimerRunnable);
+        if (sSleepTimerMinutes <= 0) {
+            sSleepTimerDeadlineMs = 0;
+            return;
+        }
+        sSleepTimerDeadlineMs = System.currentTimeMillis() + sSleepTimerMinutes * 60L * 1000L;
+        tickHandler.postDelayed(sleepTimerRunnable, sSleepTimerMinutes * 60L * 1000L);
+    }
+
+    /** Record a user interaction: refresh the rewind point and restart the
+        inactivity countdown. */
+    private void noteUserInteraction() {
+        Track t = mPlayingTrack;
+        if (t != null) {
+            sLastInteractionIdent = t.ident;
+            sLastInteractionCurMs = t.curMs;
+        }
+        sLastInteractionMs = System.currentTimeMillis();
+        resetSleepTimer();
+    }
+
+    /** Pause playback when the inactivity timer fires. The timer stays
+        armed: the next interaction restarts the countdown. */
+    private void onSleepTimerFired() {
+        // The countdown is spent; the next interaction starts a new one.
+        sSleepTimerDeadlineMs = 0;
+        if (!playing())
+            return;
+        Log.i(TAG, "Sleep timer fired after " + sSleepTimerMinutes + " minutes without interaction");
+        pause();
+    }
+
+    /** How long the phone must lie still and face down before that counts
+        as being put down for the night. */
+    private final static long FACE_DOWN_STILL_MS = 5000;
+
+    /** Accelerometer Z below this (m/s^2) means face down. */
+    private final static float FACE_DOWN_Z_THRESHOLD = -8.0f;
+
+    /** Wall-clock time the current still face-down episode began, 0 = none. */
+    private long mFaceDownSinceMs = 0;
+
+    /** True once the current face-down episode has armed the timer. */
+    private boolean mFaceDownTriggered = false;
+
+    private SensorManager mSensorManager;
+
+    /** Watch for the phone being put face down for the night: still and
+        face down for FACE_DOWN_STILL_MS arms the sleep timer. The trigger
+        fires once per episode — a later sample that is not still and face
+        down re-arms it — so the countdown is not restarted over and over
+        while the phone just lies there. */
+    private final SensorEventListener mFaceDownListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            float x = event.values[0];
+            float y = event.values[1];
+            float z = event.values[2];
+            float total = (float) Math.sqrt(x * x + y * y + z * z);
+            boolean faceDown = z < FACE_DOWN_Z_THRESHOLD
+                    && total >= 8.0f && total <= 11.0f;
+            long now = System.currentTimeMillis();
+            if (!faceDown) {
+                mFaceDownSinceMs = 0;
+                mFaceDownTriggered = false;
+                return;
+            }
+            if (mFaceDownSinceMs == 0)
+                mFaceDownSinceMs = now;
+            if (!mFaceDownTriggered && now - mFaceDownSinceMs >= FACE_DOWN_STILL_MS) {
+                mFaceDownTriggered = true;
+                onFaceDown();
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
+    };
+
+    /** The phone has lain still and face down long enough to count as put
+        down for the night. Arm the sleep timer to the last nonzero
+        setting if it is off, and restart the countdown from now either
+        way: the user was awake when they put it down, so the countdown
+        should run from then, not from an earlier interaction. */
+    private void onFaceDown() {
+        if (sSleepTimerMinutes == 0) {
+            int minutes = getLastSleepTimerMinutes();
+            Log.i(TAG, "Face down: arming sleep timer to " + minutes + " minutes");
+            setSleepTimer(minutes);
+        } else {
+            Log.i(TAG, "Face down: restarting sleep timer countdown");
+        }
+        noteUserInteraction();
+    }
+
     private MediaSession mSession;
     private int mLastVolume = Integer.MIN_VALUE;
 
@@ -157,7 +367,7 @@ public class MusicService
                     curMs = t.durMs;
                 t.curMs = (int) curMs;
 
-                TcpService.broadcast(TcpService.NFY_TRACK_UPDATED, t.ident, String.valueOf(t.curMs));
+                TcpService.broadcast(TcpService.NFY_TRACK_UPDATED, t.ident, String.valueOf(t.curMs), String.valueOf(sleepTimerRemainingMs()));
             }
         }
         sendBroadcast(i);
@@ -215,7 +425,31 @@ public class MusicService
             @Override
             public void play() {
                 Log.d(TAG, "ForwardingPlayer.play");
+                // Resuming a finished track (e.g., after the sleep-timer
+                // boundary pause) plays the next unfinished track
+                // instead of replaying the finished one. Route through
+                // the service's play path, deferred past this session
+                // dispatch so playTrack's session rebuild is safe.
+                // The interaction is still noted here: the posted play
+                // does not go through onStartCommand.
+                Track current = Tracks.currentTrack();
+                if (current != null && current.isFinished()) {
+                    Log.i(TAG, "ForwardingPlayer.play: current track finished, advancing");
+                    noteUserInteraction();
+                    tickHandler.post(new Runnable() {
+                        public void run() {
+                            MusicService.this.play(null);
+                        }
+                    });
+                    return;
+                }
                 super.play();
+                // The MediaSession drives the player directly for
+                // earbud, notification, and lock-screen buttons, so
+                // this is the only place those interactions are seen.
+                // Internal starts and pauses use the underlying player
+                // directly and do not come through here.
+                noteUserInteraction();
                 sendPlayPauseStatus();
             }
 
@@ -223,6 +457,8 @@ public class MusicService
             public void pause() {
                 Log.d(TAG, "ForwardingPlayer.pause");
                 super.pause();
+                // See play() above.
+                noteUserInteraction();
                 sendPlayPauseStatus();
             }
 
@@ -335,6 +571,7 @@ public class MusicService
         super.onCreate();
         Log.d(TAG, "MusicService.onCreate");
         sPlaybackSpeed = getPersistedSpeed(this);
+        sSleepTimerMinutes = getPersistedSleepTimerMinutes(this);
 
         mAudioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         createNotificationChannel();
@@ -360,11 +597,13 @@ public class MusicService
                         case android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
                             Log.d(TAG, "FAST_FORWARD button");
                             skipForward();
+                            noteUserInteraction();
                             abortBroadcast();
                             break;
                         case android.view.KeyEvent.KEYCODE_MEDIA_REWIND:
                             Log.d(TAG, "REWIND button");
                             skipBack();
+                            noteUserInteraction();
                             abortBroadcast();
                             break;
                         case android.view.KeyEvent.KEYCODE_MEDIA_NEXT:
@@ -384,6 +623,18 @@ public class MusicService
         IntentFilter filter = new IntentFilter(Intent.ACTION_MEDIA_BUTTON);
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
         registerReceiver(mMediaButtonReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+
+        // Listen for the phone being put face down, to arm the sleep timer.
+        // The accelerometer needs no permission, and the listener lives
+        // only as long as the service, so it cannot arm anything while
+        // the app is fully idle.
+        mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        if (mSensorManager != null) {
+            Sensor accelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            if (accelerometer != null)
+                mSensorManager.registerListener(mFaceDownListener, accelerometer,
+                        SensorManager.SENSOR_DELAY_NORMAL);
+        }
     }
 
     private final MediaSession.Callback mMediaSessionCallback = new MediaSession.Callback() {
@@ -490,6 +741,7 @@ public class MusicService
         String ident = null;
         if (intent != null)
             ident = intent.getStringExtra("ident");
+        boolean substituted = false;
         if (ident == null) {
             t = Tracks.currentTrack();
             if (t == null) {
@@ -497,6 +749,24 @@ public class MusicService
                 return;
             }
             Log.i(TAG, "play: play current track " + t);
+            // Resuming a finished track (e.g., after the sleep-timer
+            // boundary pause) plays the next track instead of
+            // replaying the finished one, following the After setting:
+            // the first unfinished track when After is FIRST,
+            // otherwise the next unfinished track. An explicitly
+            // chosen track (ident) still restarts, so replay stays
+            // possible.
+            if (t.isFinished()) {
+                Track next = MainActivity.mAfterTrack == MainActivity.AfterTrack.FIRST
+                        ? Tracks.pickFirst() : Tracks.pickNext();
+                if (next != null) {
+                    Log.i(TAG, "play: current track finished, playing next " + next);
+                    t = next;
+                    substituted = true;
+                } else {
+                    Log.i(TAG, "play: current track finished, no unfinished track; replaying");
+                }
+            }
         } else {
             t = Tracks.findTrackByIdent(ident);
             if (t == null) {
@@ -506,10 +776,17 @@ public class MusicService
         }
         Note.toastShort(this, t.artist);
         long seekMs;
-        if (intent != null)
+        // An intent position belongs to the requested track, not to a
+        // substituted next track.
+        if (!substituted && intent != null)
             seekMs = intent.getIntExtra("ms", t.curMs);
         else
             seekMs = t.curMs;
+        // A finished track restarts from the beginning, matching
+        // makePlayIntent: playing it at its stored end position would
+        // end instantly.
+        if (t.isFinished())
+            seekMs = 0;
         Log.i(TAG, "play " + t + " at " + seekMs);
         playTrack(t, seekMs);
     }
@@ -571,8 +848,35 @@ public class MusicService
             case ACTION_SET_SPEED:
                 setPlaybackSpeed(intent.getFloatExtra(SPEED_EXTRA, 1.0f));
                 break;
+            case ACTION_SET_SLEEP_TIMER:
+                setSleepTimer(intent.getIntExtra(SLEEP_TIMER_MINUTES_EXTRA, 0));
+                break;
+            case ACTION_USER_INTERACTION:
+                // Noted below, with the other user actions.
+                break;
             default:
                 Note.w(TAG, "Unexpected action " + action);
+                break;
+        }
+
+        // User actions reset the inactivity timer. Deliberately not here:
+        // status queries and automatic pauses, which must not keep the
+        // timer alive.
+        switch (action) {
+            case ACTION_PLAY:
+            case ACTION_PAUSE:
+            case ACTION_TOGGLE_PLAYBACK:
+            case ACTION_SEEK:
+            case ACTION_SKIP_FORWARD:
+            case ACTION_SKIP_BACK:
+            case ACTION_SKIP_TO_TRACK_START:
+            case ACTION_SKIP_TO_TRACK_END:
+            case ACTION_SET_SPEED:
+            case ACTION_SET_SLEEP_TIMER:
+            case ACTION_USER_INTERACTION:
+                noteUserInteraction();
+                break;
+            default:
                 break;
         }
 
@@ -618,13 +922,27 @@ public class MusicService
         Log.i(TAG, "pause");
         setState(State.Paused);
         assert mPlayer != null;
-        mPlayer.pause();
+        // Call the underlying player directly: the ForwardingPlayer
+        // interceptor records a user interaction, and pauses from here
+        // (timer fire, boundary, automatic) must not reset the timer.
+        // User pauses already record via onStartCommand.
+        mUnderlyingPlayer.pause();
         relaxResources(false);
         Tracks.writeState(this, "pause");
         TcpService.broadcast(TcpService.NFY_PAUSED);
     }
 
     private void seekTo(long ms) {
+        // Record the position on the track itself, so a later play resumes
+        // from here even when there is no live player to move (stopped) or
+        // the player is paused: play reads the track's position, not the
+        // player's, so a seek that only moved the player would be lost.
+        Track t = Tracks.currentTrack();
+        if (t != null) {
+            t.curMs = (int) ms;
+            Tracks.writeState(this, "seek");
+            TcpService.broadcast(TcpService.NFY_TRACK_UPDATED, t.ident, String.valueOf(ms), String.valueOf(sleepTimerRemainingMs()));
+        }
         if (mUnderlyingPlayer == null || mState == State.Stopped) {
             Log.i(TAG, "seek while stopped");
             return;
@@ -633,10 +951,6 @@ public class MusicService
         // Call the underlying player directly to avoid triggering our ForwardingPlayer interceptor
         mUnderlyingPlayer.seekTo(ms);
         updateActivity();
-
-        Track t = Tracks.currentTrack();
-        if (t != null)
-            TcpService.broadcast(TcpService.NFY_TRACK_UPDATED, t.ident, String.valueOf(ms));
     }
 
     /** How much to advance. */
@@ -649,6 +963,11 @@ public class MusicService
     private final static int BARRIER_MS = 1000;
 
     private void skipForward() {
+        // A skip attempt is a user interaction whether or not it moves:
+        // reset the timer even at the barrier or while stopped. The
+        // session-driven paths (earbud double-tap) come through here
+        // without passing onStartCommand, so this is where they are seen.
+        noteUserInteraction();
         if (mUnderlyingPlayer == null || mState == State.Stopped) {
             Log.i(TAG, "forward while stopped");
             return;
@@ -668,6 +987,8 @@ public class MusicService
     }
 
     private void skipBack() {
+        // See skipForward above.
+        noteUserInteraction();
         if (mUnderlyingPlayer == null || mState == State.Stopped) {
             Log.i(TAG, "rewind while stopped");
             return;
@@ -731,7 +1052,11 @@ public class MusicService
             return;
         }
         Log.i(TAG, "configAndStartMediaPlayer: start playing");
-        mPlayer.play();
+        // Call the underlying player directly: the ForwardingPlayer
+        // interceptor records a user interaction, and starts from here
+        // include automatic ones (track advance) that must not reset
+        // the timer. User starts already record via onStartCommand.
+        mUnderlyingPlayer.play();
     }
 
     private void playTrack(@NonNull Track t, long seekMs) {
@@ -815,6 +1140,18 @@ public class MusicService
             track.curMs = track.durMs;
             Tracks.writeState(this, "onCompletion");
             TcpService.broadcast(TcpService.NFY_TRACK_FINISHED, track.ident);
+        }
+
+        // With the sleep timer armed, a track ending pauses playback:
+        // no next track is selected and After is untouched, so
+        // the track that just ended stays current and rewind to the last
+        // interaction point remains available. Pausing keeps the
+        // service in the foreground, so a later remote play can
+        // resume while the phone is locked.
+        if (sSleepTimerMinutes > 0) {
+            Log.i(TAG, "Sleep timer armed: pausing at end of track");
+            pause();
+            return;
         }
 
         Track nextTrack = null;
@@ -932,6 +1269,10 @@ public class MusicService
 
     @Override
     public void onDestroy() {
+        if (mSensorManager != null) {
+            mSensorManager.unregisterListener(mFaceDownListener);
+            mSensorManager = null;
+        }
         if (mMediaButtonReceiver != null) {
             unregisterReceiver(mMediaButtonReceiver);
             mMediaButtonReceiver = null;

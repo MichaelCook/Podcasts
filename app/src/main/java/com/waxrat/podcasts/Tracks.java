@@ -703,13 +703,15 @@ class Tracks {
     }
 
     static synchronized int deleteFinished(@NonNull Context context) {
-        // Don't delete the currently selected track: a track that just
-        // finished stays selected until MusicService finishes transitioning
-        // off of it, so deleting it here could race with that transition.
-        Track current = currentTrack();
+        // Delete every finished track, including the currently selected
+        // one: a sleep-timer boundary pause leaves the finished track
+        // current indefinitely, so excluding it made Backspace a no-op
+        // there. Deleting a finished track's files cannot disturb the
+        // transition off it — that transition never touches the old
+        // track's files again after writing its finished state.
         int numDeleted = 0;
         for (Track t : tracks)
-            if (t != current && isFinishedDeletable(t)) {
+            if (isFinishedDeletable(t)) {
                 t.deleteFiles(context);
                 ++numDeleted;
             }

@@ -118,8 +118,8 @@ public class Utilities {
     }
 
     @NonNull
-    static String mmss(int ms) {
-        int s = (ms + 500) / 1000;
+    static String mmss(long ms) {
+        long s = (ms + 500) / 1000;
         return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
     }
 

@@ -43,6 +43,7 @@ public class TcpService extends Service {
     static final String NFY_CLIENT_CONNECT = "NFY\tCLIENT-CONNECT";
     static final String NFY_VOLUME_UPDATED = "NFY\tVOLUME-UPDATED";
     static final String NFY_SPEED_UPDATED = "NFY\tSPEED-UPDATED";
+    static final String NFY_SLEEP_TIMER_UPDATED = "NFY\tSLEEP-TIMER-UPDATED";
 
     @Override
     public void onCreate() {
@@ -342,6 +343,8 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd, String.valueOf(numClients())));
                     askTo(MusicService.ACTION_GET_STATUS);   // might as well include this info, too
                     adjustVolume(AudioManager.ADJUST_SAME);  // might as well include this info, too
+                    sendLine(makeLine(TcpService.NFY_SLEEP_TIMER_UPDATED,
+                            String.valueOf(MusicService.getPersistedSleepTimerMinutes(mContext))));  // might as well include this info, too
 
                     // If we're not currently playing, then the following info is important
                     // for the QtEdPod display to be correct
@@ -418,11 +421,13 @@ public class TcpService extends Service {
                 if (cmd.equals("DELETE-FINISHED-TRACKS") && f.length == 1) {
                     int numDeleted = Tracks.deleteFinished(mContext);
                     if (numDeleted != 0) {
-                        Track cur = Tracks.currentTrack();
                         Tracks.restore(mContext.getApplicationContext(), true);
                         setListItems();
+                        // Restore leaves the current track correct: it
+                        // advances to the next track if the old current
+                        // was deleted. Broadcast whatever is current now.
+                        Track cur = Tracks.currentTrack();
                         if (cur != null) {
-                            Tracks.selectTrackByIdent(cur.ident);
                             TcpService.broadcast(TcpService.NFY_TRACK_SELECTED, cur.ident);
                         }
 
@@ -521,6 +526,21 @@ public class TcpService extends Service {
                     sendLine(makeLine("OK", cmd, String.valueOf(speed)));
                     // NFY SPEED-UPDATED is broadcast by MusicService.setPlaybackSpeed,
                     // covering phone-initiated changes too.
+                    continue;
+                }
+                if (cmd.equals("SET-SLEEP-TIMER") && f.length == 2) {
+                    int minutes;
+                    try {
+                        minutes = Integer.parseInt(f[1]);
+                    } catch (NumberFormatException ex) {
+                        sendLine(makeLine("ERR", cmd, "Bad argument", f[1]));
+                        continue;
+                    }
+                    Intent in = new Intent(MusicService.ACTION_SET_SLEEP_TIMER);
+                    in.setPackage(Utilities.PACKAGE);
+                    in.putExtra(MusicService.SLEEP_TIMER_MINUTES_EXTRA, minutes);
+                    mContext.startService(in);
+                    sendLine(makeLine("OK", cmd, String.valueOf(minutes)));
                     continue;
                 }
                 if (cmd.equals("ECHO")) {

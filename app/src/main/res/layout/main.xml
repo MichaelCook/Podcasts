@@ -20,12 +20,18 @@
     android:gravity="center"
     android:orientation="vertical" >
 
-    <ListView
-        android:id="@android:id/list"
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
         android:layout_height="0dip"
-        android:layout_weight="1" >
-    </ListView>
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@android:id/list"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <SeekBar
         android:id="@+id/seekBar"
@@ -58,6 +64,15 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="(auto scroll)"
+            android:textAppearance="?android:attr/textAppearanceSmall" />
+
+        <TextView
+            android:id="@+id/sleeptimer"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="(sleep timer)"
             android:textAppearance="?android:attr/textAppearanceSmall" />
 
     </LinearLayout>
