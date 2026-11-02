@@ -12,6 +12,7 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.AudioManager;
+import android.os.BatteryManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -325,8 +326,17 @@ public class MusicService
         down for the night. Arm the sleep timer to the last nonzero
         setting if it is off, and restart the countdown from now either
         way: the user was awake when they put it down, so the countdown
-        should run from then, not from an earlier interaction. */
+        should run from then, not from an earlier interaction. The phone
+        must also be charging: face down in a pocket while seated looks
+        the same to the accelerometer, and a pocket never charges. */
     private void onFaceDown() {
+        if (!isCharging()) {
+            // Not put down for the night: drop this episode, so plugging
+            // in while still face down starts a fresh one and arms then.
+            mFaceDownTriggered = false;
+            mFaceDownSinceMs = 0;
+            return;
+        }
         if (sSleepTimerMinutes == 0) {
             int minutes = getLastSleepTimerMinutes();
             Log.i(TAG, "Face down: arming sleep timer to " + minutes + " minutes");
@@ -335,6 +345,13 @@ public class MusicService
             Log.i(TAG, "Face down: restarting sleep timer countdown");
         }
         noteUserInteraction();
+    }
+
+    /** True if the phone is on a charger (AC, USB, or wireless), from the
+        sticky battery intent: no receiver registration or permission. */
+    private boolean isCharging() {
+        Intent status = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        return status != null && status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
     }
 
     private MediaSession mSession;
@@ -873,8 +890,14 @@ public class MusicService
             case ACTION_SKIP_TO_TRACK_END:
             case ACTION_SET_SPEED:
             case ACTION_SET_SLEEP_TIMER:
-            case ACTION_USER_INTERACTION:
                 noteUserInteraction();
+                break;
+            case ACTION_USER_INTERACTION:
+                // Any touch or key in MainActivity, and onResume: the user
+                // is awake, so restart the timer, but do not refresh the
+                // rewind point — merely looking at the app is not a
+                // playback interaction.
+                resetSleepTimer();
                 break;
             default:
                 break;
@@ -1133,6 +1156,10 @@ public class MusicService
     }
 
     private void playNextTrack() {
+        // A finished track resets the speed to 1x, so a sped-up track
+        // does not carry its speed into the next one.
+        if (sPlaybackSpeed != 1.0f)
+            setPlaybackSpeed(1.0f);
         Track track = Tracks.currentTrack();
         if (track == null) {
             Note.w(TAG, "onCompletion: no current track");

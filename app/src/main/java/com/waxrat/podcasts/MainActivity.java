@@ -1248,6 +1248,8 @@ public class MainActivity extends Activity implements OnClickListener,
                     }
                     else {
                         Tracks.seek(this, track, 0);
+                        // Refresh the list so the rewound track no longer shows as finished.
+                        setSeekBar();
                     }
                 });
     }
