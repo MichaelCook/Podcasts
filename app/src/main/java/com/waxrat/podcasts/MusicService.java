@@ -1109,7 +1109,11 @@ public class MusicService
             setUpAsForeground('"' + t.title + "\" (play)");
 
             if (seekMs != -1) {
-                mPlayer.seekTo(seekMs);
+                // Call the underlying player directly: this is an internal
+                // resume seek, and the ForwardingPlayer interceptor would
+                // mistake it for a skip when the track resumes near the
+                // skip increment.
+                mUnderlyingPlayer.seekTo(seekMs);
             }
 
             mPlayingTrack = t;
